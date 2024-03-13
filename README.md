@@ -16,4 +16,12 @@ cc -shared -Wl,-soname,C_circle_functions -o C_circle_functions.so -fPIC C_circl
 
 The radius used for smoothing and searching for repeat tracks is set based on model type in `AEW_Tracks.py`. This can be adjusted if necessary. The minimum threshold to qualify as a potential AEW track point is set in `AEW_Tracks.py`, and can also be changed. 
 
-To run the tracker, the locations of the data in `Pull_data.py` need to be verified and then updated if the data locations are different. 
+To run the tracker, the locations of the data in `Pull_data.py` need to be verified and then updated if the data locations are different.
+
+
+## Requirements:
+
+Intall the environment using:
+```
+conda env create -f env_aew.yml
+```
