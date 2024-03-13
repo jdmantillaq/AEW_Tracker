@@ -1,31 +1,9 @@
 from __future__ import division  # makes division not round with integers
-import os
 import pygrib
 from netCDF4 import Dataset
 import numpy as np
 import xarray as xr
 import wrf as wrf
-from datetime import datetime, timedelta
-from skimage.feature import peak_local_max
-# matplotlib.use('pdf')
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
-from matplotlib import rcParams
-import matplotlib.patches as mpatches
-# import matplotlib.animation as animation
-# from matplotlib.animation import FuncAnimation
-from matplotlib.backends.backend_pdf import PdfPages
-from matplotlib.colors import ListedColormap, LinearSegmentedColormap
-import cartopy.crs as ccrs
-from cartopy.feature import NaturalEarthFeature
-import cartopy.feature as cfeature
-# import cartopy.feature as cfeature
-# import cartopy.io.shapereader as shpreader
-from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
-from scipy.ndimage import gaussian_filter
-import ctypes
-import numpy.ctypeslib as ctl
 
 # Pull_data.py contains functions that are used by AEW_Tracks.py. All of the
 # functions in Pull_Data.py aid in the pulling of variables and formatting
