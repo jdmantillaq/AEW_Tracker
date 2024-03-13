@@ -32,12 +32,26 @@ import numpy.ctypeslib as ctl
 # them to be in a common format so AEW_Tracks.py does not need to know what
 # model the data came from.
 
-# This function takes a common_object and assigns the lat, lon, lat/lon
-# indices over Africa/the Atlantic, and dt value based on the data source
-# which is the model attribute of the common_object.
-
 
 def get_common_track_data(common_object):
+    """
+    Obtain common data necessary for tracking atmospheric features over
+    Africa and the Atlantic.
+
+    This function takes a common_object containing information about the
+    atmospheric model and assigns the latitude, longitude, latitude/longitude
+    indices over Africa/the Atlantic, and a time step value (dt) based on
+    the data source specified by the model attribute of
+    the common_object.
+
+    Parameters:
+        common_object (object): An object containing common properties such
+        as model type.
+
+    Returns:
+        None
+    """
+
     # box of interest over Africa/the Atlantic (values are from Albany)
     north_lat = 30.
     south_lat = 5.
@@ -121,7 +135,7 @@ def get_common_track_data(common_object):
             'Historical/run3/2006/U_CAM5-1-0.25degree_All-Hist_est1_v3_run3.'\
             'cam.h4.2006-07-01-00000_AEW.nc'
         data = xr.open_dataset(file_location, decode_times=False)
-        
+
         # get lat and lon values
         # get the latitude and longitude at a single time
         # (since they don't change with time)
@@ -148,16 +162,23 @@ def get_common_track_data(common_object):
         lon_degrees = np.abs(lon[0, 0] - lon[0, -1])
 
     elif common_object.model == 'ERA5':
-        # dt for ERA5 is 1 hour (data is hourly), but set dt to whatever the dt is for the dataset to be compared with
+        # dt for ERA5 is 1 hour (data is hourly),
+        # but set dt to whatever the dt is for the dataset to be compared with
         # Eg dt=3 to compare with CAM5 or dt=6 to compare with WRF
         dt = 6  # time between files
-        file_location = '/global/cfs/projectdirs/m3522/cmip6/ERA5/e5.oper.an.pl/200509/e5.oper.an.pl.128_131_u.ll025uv.2005090100_2005090123.nc'
+        file_location = '/mnt/DATASET/202007/ERA5_PL-20200701_0000.grib'
+        # file_location = '/global/cfs/projectdirs/m3522/cmip6/ERA5/'\
+        #     'e5.oper.an.pl/200509/'\
+        #     'e5.oper.an.pl.128_131_u.ll025uv.2005090100_2005090123.nc'
+
         data = xr.open_dataset(file_location)
         # get lat and lon values
-        # get the latitude and longitude at a single time (since they don't change with time)
-        # ordered lat, and going from north to south (so 90, 89, 88, .....-88, -89, -90)
+        # get the latitude and longitude at a single time
+        # (since they don't change with time)
+        # ordered lat, and going from north to south
+        # (so 90, 89, 88, .....-88, -89, -90)
         lat_1d_n_s = data.latitude.values
-        lon_1d_360 = data.longitude.values  # ordered lon and goes from 0-360 degrees
+        lon_1d_360 = data.longitude.values  # ordered lon and goes from 0-360°
         # make the lat array go from south to north
         lat_1d = np.flip(lat_1d_n_s)
         # make the longitude go from -180 to 180 degrees
@@ -201,11 +222,13 @@ def get_common_track_data(common_object):
 
     elif common_object.model == 'ERAI':
         dt = 6  # time between files
-        file_location = '/global/cscratch1/sd/ebercosh/Reanalysis/ERA-I/ei.oper.an.pl.regn128uv.2010113000'
+        file_location = '/global/cscratch1/sd/ebercosh/Reanalysis/ERA-I/'\
+            'ei.oper.an.pl.regn128uv.2010113000'
         grbs = pygrib.open(file_location)
         grb = grbs.select(name='U component of wind')[23]
         # lat and lon are 2D, ordered lat, lon
-        # the lat goes from north to south (so 90, 89, 88, .....-88, -89, -90), and lon goes from 0-360 degrees
+        # the lat goes from north to south (so 90, 89, 88, .....-88, -89, -90),
+        # and lon goes from 0-360 degrees
         lat_2d_n_s, lon_2d_360 = grb.latlons()
         # make the lat array go from south to north
         lat = np.flip(lat_2d_n_s, axis=0)
@@ -240,13 +263,29 @@ def get_common_track_data(common_object):
     print(common_object.total_lon_degrees)
     return
 
-# This is a function to get the WRF variables required for tracking
-# The function takes the common_object that holds lat/lon information, the scenario type, and the date and time for the desired file
-# The function returns u, v, relative vorticity, and curvature vorticity on specific pressure levels
 
-
-# , lon_index_west, lat_index_south, lon_index_east, lat_index_north):
 def get_WRF_variables(common_object, scenario_type, date_time):
+    """
+    Retrieve WRF variables required for tracking atmospheric features.
+
+    This function takes the common_object containing latitude and
+    longitude information, the scenario_type, and the date and time
+    for the desired file. It opens the WRF file corresponding to the
+    specified scenario type and date_time and retrieves u, v, relative
+    vorticity, and curvature vorticity on specific pressure levels.
+
+    Parameters:
+        common_object (object): An object containing common properties
+            such as lat/lon information.
+        scenario_type (str): Type of scenario, e.g., Historical, Forecast, etc.
+        date_time (datetime): Date and time for the desired WRF file.
+
+    Returns:
+        tuple: A tuple containing four arrays representing u, v,
+            relative vorticity, and
+        curvature vorticity on specific pressure levels.
+    """
+
     # location of WRF file
     file_location = '/global/cscratch1/sd/ebercosh/WRF_TCM/' + \
         scenario_type + '/' + date_time.strftime('%Y') + '/wrfout_d01_crop_'
@@ -272,58 +311,74 @@ def get_WRF_variables(common_object, scenario_type, date_time):
 
     return u_levels.values, v_levels.values, rel_vort_levels, curve_vort_levels
 
-# This function interpolates WRF variables to specific pressure levels
-# This function takes the pressure and the variable to be interpolated.
-# The fucntion returns a three dimensional array ordered lev (pressure), lat, lon
-
 
 def calc_var_pres_levels(p, var):
-    # pressure levels needed
+    """
+    Interpolate WRF variables to specific pressure levels.
+
+    This function takes the pressure (p) and the variable (var)
+    to be interpolated. It interpolates the variable to specified pressure
+    levels and returns a three-dimensional array ordered
+    as lev (pressure), lat, lon.
+
+    Parameters:
+        p (xarray.DataArray): Pressure levels.
+        var (xarray.DataArray): Variable to be interpolated.
+
+    Returns:
+        xarray.DataArray: A three-dimensional array representing the
+            interpolated variable
+        at specific pressure levels, ordered lev (pressure), lat, lon.
+    """
+    # Pressure levels needed
     pressure_levels = [850., 700., 600.]
-    # interpolate the variable to the above pressure levels
-    # returns an array with the lev dim the length of pressure_levels
+    # Interpolate the variable to the above pressure levels
+    # Returns an array with the lev dimension the length of pressure_levels
     var_levels = wrf.interplevel(var, p, pressure_levels)
-    # get rid of any nans
-    # linearly interpolate the missing values
-# print("Any nans?")
-# print(np.isnan(var_levels).any())
+    # Get rid of any NaNs
+    # Linearly interpolate the missing values
     mask = np.isnan(var_levels.values)
     var_levels.values[mask] = np.interp(np.flatnonzero(
         mask), np.flatnonzero(~mask), var_levels.values[~mask])
-# print("Any nans now?")
-# print(np.isnan(var_levels).any())
 
     return var_levels
 
-# This is a function to get the MERRA2 variables required for tracking
-# The function takes the common_object that holds lat/lon information, the scenario type, and the date and time for the desired file
-# The function returns u, v, relative vorticity, and curvature vorticity on specific pressure levels
-
 
 def get_MERRA2_variables(common_object, date_time):
-    # location of MERRA-2 files
+    """
+    Get the MERRA2 variables required for tracking.
+
+    This function takes the common_object that holds lat/lon information,
+    the scenario type, and the date and time for the desired file.
+    It returns u, v, relative vorticity, and curvature
+    vorticity on specific pressure levels.
+
+    Parameters:
+        common_object: Object containing common attributes such as
+            lat/lon information.
+        date_time (datetime.datetime): Date and time for the desired file.
+
+    Returns:
+        tuple: A tuple containing u, v, relative vorticity, and
+            curvature vorticity on specific pressure levels.
+    """
+    # Location of MERRA-2 files
     u_file_location = '/global/cscratch1/sd/ebercosh/MERRA2/U1000_'
     v_file_location = '/global/cscratch1/sd/ebercosh/MERRA2/V1000_'
-    # open files
+    # Open files
     u_data = xr.open_dataset(
         u_file_location + date_time.strftime("%Y%m%d") + '.nc')
     v_data = xr.open_dataset(
         v_file_location + date_time.strftime("%Y%m%d") + '.nc')
-# print(u_file_location + date_time.strftime("%Y%m%d") + '.nc')
-# print(u_data)
-    # get u and v
+
+    # Get u and v
     print("Pulling variables...")
-    # the MERRA data has 8 times in one file (data is 3 hourly), so pull only the hour that matches the current date_time
-    # unfortunately all of Dustin's MERRA2 data has the hours attached to July 1, so need to have a work around using a dictionary
     time_dict = {'00': 0, '03': 1, '06': 2,
                  '09': 3, '12': 4, '15': 5, '18': 6, '21': 7}
-# u_3d = u_data.U.sel(time=np.datetime64(date_time))
-# v_3d = v_data.V.sel(time=np.datetime64(date_time))
     u_3d = u_data.U[time_dict[date_time.strftime("%H")], :, :, :]
     v_3d = v_data.V[time_dict[date_time.strftime("%H")], :, :, :]
-# print(u_3d)
-# print(v_3d)
-    # get u and v only on the levels 850, 700, and 600 hPa, which correspond to the levels 63, 56, and 53 in MERRA2 (according to Dustin)
+
+    # Get u and v only on the levels 850, 700, and 600 hPa
     lev_list = [53, 56, 63]
     u_levels = np.zeros([3, u_3d.shape[1], u_3d.shape[2]])
     v_levels = np.zeros([3, v_3d.shape[1], v_3d.shape[2]])
@@ -331,7 +386,7 @@ def get_MERRA2_variables(common_object, date_time):
         u_levels[level_index, :, :] = u_3d.sel(lev=lev_list[level_index])
         v_levels[level_index, :, :] = v_3d.sel(lev=lev_list[level_index])
 
-    # get rid of any NANs
+    # Interpolate to fill any NaNs
     if np.isnan(u_levels).any():
         mask_u = np.isnan(u_levels)
         u_levels[mask_u] = np.interp(np.flatnonzero(
@@ -341,20 +396,21 @@ def get_MERRA2_variables(common_object, date_time):
         v_levels[mask_v] = np.interp(np.flatnonzero(
             mask_v), np.flatnonzero(~mask_v), v_levels[~mask_v])
 
-    # calculate the relative vorticity
+    # Calculate the relative vorticity
     rel_vort_levels = calc_rel_vort(
         u_levels, v_levels, common_object.lat, common_object.lon)
-    # calculate the curvature voriticty
+    # Calculate the curvature vorticity
     curve_vort_levels = calc_curve_vort(
         common_object, u_levels, v_levels, rel_vort_levels)
 
-    # switch the arrays to be float32 instead of float64
+    # Switch the arrays to be float32 instead of float64
     u_levels = np.float32(u_levels)
     v_levels = np.float32(v_levels)
     rel_vort_levels = np.float32(rel_vort_levels)
     curve_vort_levels = np.float32(curve_vort_levels)
 
-    # make the arrays C contiguous (will need this later for the wrapped C smoothing function)
+    # Make the arrays C contiguous
+    # (will need this later for the wrapped C smoothing function)
     u_levels = np.asarray(u_levels, order='C')
     v_levels = np.asarray(v_levels, order='C')
     rel_vort_levels = np.asarray(rel_vort_levels, order='C')
@@ -362,43 +418,67 @@ def get_MERRA2_variables(common_object, date_time):
 
     return u_levels, v_levels, rel_vort_levels, curve_vort_levels
 
-# This is a function to get the CAM5 variables required for tracking
-# The function takes the common_object that holds lat/lon information, the scenario type, and the date and time for the desired file
-# The function returns u, v, relative vorticity, and curvature vorticity on specific pressure levels
-
 
 def get_CAM5_variables(common_object, scenario_type, date_time):
+    """
+    Get the CAM5 variables required for tracking.
+
+    This function takes the common_object that holds lat/lon information,
+    the scenario type, and the date and time for the desired file.
+    It returns u, v, relative vorticity, and curvature vorticity on specific
+    pressure levels.
+
+    Parameters:
+        common_object: Object containing common attributes such as lat/lon
+            information.
+        scenario_type (str): Type of scenario, e.g., 'Historical' or 'Plus30'.
+        date_time (datetime.datetime): Date and time for the desired file.
+
+    Returns:
+        tuple: A tuple containing u, v, relative vorticity, and curvature
+            vorticity on specific pressure levels.
+    """
     # location of CAM5 files
     if scenario_type == 'Historical':
-        u_file_location = '/global/cscratch1/sd/ebercosh/CAM5/Africa/' + scenario_type + \
+        u_file_location = '/global/cscratch1/sd/ebercosh/CAM5/Africa/' \
+            + scenario_type + \
             '/run3/' + \
             date_time.strftime(
                 '%Y') + '/U_CAM5-1-0.25degree_All-Hist_est1_v3_run3.cam.h4.'
-        v_file_location = '/global/cscratch1/sd/ebercosh/CAM5/Africa/' + scenario_type + \
+        v_file_location = '/global/cscratch1/sd/ebercosh/CAM5/Africa/' \
+            + scenario_type + \
             '/run3/' + \
             date_time.strftime(
                 '%Y') + '/V_CAM5-1-0.25degree_All-Hist_est1_v3_run3.cam.h4.'
     elif scenario_type == 'Plus30':
-        u_file_location = '/global/cscratch1/sd/ebercosh/CAM5/Africa/' + scenario_type + \
+        u_file_location = '/global/cscratch1/sd/ebercosh/CAM5/Africa/' \
+            + scenario_type + \
             '/run3/' + date_time.strftime('%Y') + \
             '/U_fvCAM5_UNHAPPI30_run003.cam.h4.'
-        v_file_location = '/global/cscratch1/sd/ebercosh/CAM5/Africa/' + scenario_type + \
+        v_file_location = '/global/cscratch1/sd/ebercosh/CAM5/Africa/' \
+            + scenario_type + \
             '/run3/' + date_time.strftime('%Y') + \
             '/V_fvCAM5_UNHAPPI30_run003.cam.h4.'
     # open files
     u_data = xr.open_dataset(
-        u_file_location + date_time.strftime("%Y-%m-%d") + '-00000_AEW.nc', decode_times=False)
+        u_file_location + date_time.strftime("%Y-%m-%d") + '-00000_AEW.nc',
+        decode_times=False)
     v_data = xr.open_dataset(
-        v_file_location + date_time.strftime("%Y-%m-%d") + '-00000_AEW.nc', decode_times=False)
+        v_file_location + date_time.strftime("%Y-%m-%d") + '-00000_AEW.nc',
+        decode_times=False)
     # get u and v
     print("Pulling variables...")
-    # the CAM5 data has 8 times in one file (data is 3 hourly), so pull only the hour that matches the current date_time
-    # unfortunately xarray has trouble decoding the times in the file so use the following dictionary to get the correct time index
+    # the CAM5 data has 8 times in one file (data is 3 hourly),
+    # so pull only the hour that matches the current date_time
+    # unfortunately xarray has trouble decoding the times in the file so use
+    # the following dictionary to get the correct time index
     # using the time from the time loop
     time_dict = {'00': 0, '03': 1, '06': 2,
                  '09': 3, '12': 4, '15': 5, '18': 6, '21': 7}
-    # some of the CAM5 data is missing the last time in the file (so 7 times in a file instead of 8). Use try and except to catch these
-    # rare cases and then use the previous time step when the last time step is missing. Because this happens so infrequently, using the previous
+    # some of the CAM5 data is missing the last time in the file
+    # (so 7 times in a file instead of 8). Use try and except to catch these
+    # rare cases and then use the previous time step when the last time step
+    # is missing. Because this happens so infrequently, using the previous
     # time step does lead to any issues.
     try:
         u_3d = u_data.U[time_dict[date_time.strftime("%H")], :, :, :]
@@ -439,7 +519,8 @@ def get_CAM5_variables(common_object, scenario_type, date_time):
     rel_vort_levels = np.float32(rel_vort_levels)
     curve_vort_levels = np.float32(curve_vort_levels)
 
-    # make the arrays C contiguous (will need this later for the wrapped C smoothing function)
+    # make the arrays C contiguous
+    # (will need this later for the wrapped C smoothing function)
     u_levels = np.asarray(u_levels, order='C')
     v_levels = np.asarray(v_levels, order='C')
     rel_vort_levels = np.asarray(rel_vort_levels, order='C')
@@ -447,16 +528,32 @@ def get_CAM5_variables(common_object, scenario_type, date_time):
 
     return u_levels, v_levels, rel_vort_levels, curve_vort_levels
 
-# This is a function to get the ERA5 variables required for tracking
-# The function takes the common_object that holds lat/lon information, the scenario type, and the date and time for the desired file
-# The function returns u, v, relative vorticity, and curvature vorticity on specific pressure levels
-
 
 def get_ERA5_variables(common_object, date_time):
+    """
+    Get the ERA5 variables required for tracking.
+
+    This function takes the common_object that holds lat/lon information,
+    the date and time for the desired file. It returns u, v, relative
+    vorticity, and curvature vorticity on specific pressure levels.
+
+    Parameters:
+        common_object: Object containing common attributes such as lat/lon
+            information.
+        date_time (datetime.datetime): Date and time for the desired file.
+
+    Returns:
+        tuple: A tuple containing u, v, relative vorticity, and curvature
+        vorticity on specific pressure levels.
+    """
+
     # location of ERA5 files
-    u_file_location = '/global/cfs/projectdirs/m3522/cmip6/ERA5/e5.oper.an.pl/' + \
+
+    u_file_location = '/global/cfs/projectdirs/m3522/cmip6/ERA5/'\
+        'e5.oper.an.pl/' + \
         date_time.strftime("%Y%m") + '/e5.oper.an.pl.128_131_u.ll025uv.'
-    v_file_location = '/global/cfs/projectdirs/m3522/cmip6/ERA5/e5.oper.an.pl/' + \
+    v_file_location = '/global/cfs/projectdirs/m3522/cmip6/ERA5/'\
+        'e5.oper.an.pl/' + \
         date_time.strftime("%Y%m") + '/e5.oper.an.pl.128_132_v.ll025uv.'
     # open files
     u_data = xr.open_dataset(u_file_location + date_time.strftime(
@@ -465,8 +562,10 @@ def get_ERA5_variables(common_object, date_time):
         "%Y%m%d") + '00_' + date_time.strftime("%Y%m%d") + '23.nc')
     # get u and v
     print("Pulling variables...")
-    # ERA5 is hourly. To compare with CAM5, which is 3 hourly, average every three hours together (eg 00, 01, and 02 are averaged)
-    # to make the comparison easier. To compare with WRF, which is 6 hourly, average every six hours. The averaging is controlled by
+    # ERA5 is hourly. To compare with CAM5, which is 3 hourly,
+    # average every three hours together (eg 00, 01, and 02 are averaged)
+    # to make the comparison easier. To compare with WRF, which is 6 hourly,
+    # average every six hours. The averaging is controlled by
     # what is set at dt in the common_object (eg dt=3 for CAM5 or dt=6 for WRF)
     u_3d = u_data.U[int(date_time.strftime("%H")), :, :, :]
     v_3d = v_data.V[int(date_time.strftime("%H")), :, :, :]
@@ -475,23 +574,32 @@ def get_ERA5_variables(common_object, date_time):
     u_levels_360 = np.zeros([3, u_3d.shape[1], u_3d.shape[2]])
     v_levels_360 = np.zeros([3, v_3d.shape[1], v_3d.shape[2]])
     for level_index in range(0, 3):
-        # the ERA5 data goes from north to south. Use flip to flip it 180 degrees in the latitude dimension so that
+        # the ERA5 data goes from north to south. Use flip to flip it
+        # 180 degrees in the latitude dimension so that
         # the array now goes from south to north like the other datasets.
         u_levels_360[level_index, :, :] = np.flip(
             u_3d.sel(level=lev_list[level_index]), axis=0)
         v_levels_360[level_index, :, :] = np.flip(
             v_3d.sel(level=lev_list[level_index]), axis=0)
-    # need to roll the u and v variables on the longitude axis because the longitudes were changed from
-    # 0-360 to -180 to 180
+    # need to roll the u and v variables on the longitude axis because the
+    # longitudes were changed from 0-360 to -180 to 180
     u_levels_full = np.roll(u_levels_360, int(u_levels_360.shape[2]/2), axis=2)
     v_levels_full = np.roll(v_levels_360, int(v_levels_360.shape[2]/2), axis=2)
 
-    # Crop the data. This is a global dataset and we don't need to calculate vorticity values over the entire globe, only over the region of interest.
-    # The tracking algorithm only looks over Africa/the Atlantic, so it's unnecessary to have a global dataset.
-    u_levels = u_levels_full[:, common_object.lat_index_south_crop:common_object.lat_index_north_crop +
-                             1, common_object.lon_index_west_crop:common_object.lon_index_east_crop+1]
-    v_levels = v_levels_full[:, common_object.lat_index_south_crop:common_object.lat_index_north_crop +
-                             1, common_object.lon_index_west_crop:common_object.lon_index_east_crop+1]
+    # Crop the data. This is a global dataset and we don't need to calculate
+    # vorticity values over the entire globe, only over the region of interest.
+    # The tracking algorithm only looks over Africa/the Atlantic,
+    # so it's unnecessary to have a global dataset.
+    u_levels = u_levels_full[
+        :,
+        common_object.lat_index_south_crop:common_object.lat_index_north_crop
+        + 1,
+        common_object.lon_index_west_crop:common_object.lon_index_east_crop+1]
+    v_levels = v_levels_full[
+        :,
+        common_object.lat_index_south_crop:common_object.lat_index_north_crop
+        + 1,
+        common_object.lon_index_west_crop:common_object.lon_index_east_crop+1]
 
     # get rid of any NANs
     if np.isnan(u_levels).any():
@@ -516,7 +624,8 @@ def get_ERA5_variables(common_object, date_time):
     rel_vort_levels = np.float32(rel_vort_levels)
     curve_vort_levels = np.float32(curve_vort_levels)
 
-    # make the arrays C contiguous (will need this later for the wrapped C smoothing function)
+    # make the arrays C contiguous
+    # (will need this later for the wrapped C smoothing function)
     u_levels = np.asarray(u_levels, order='C')
     v_levels = np.asarray(v_levels, order='C')
     rel_vort_levels = np.asarray(rel_vort_levels, order='C')
@@ -524,14 +633,28 @@ def get_ERA5_variables(common_object, date_time):
 
     return u_levels, v_levels, rel_vort_levels, curve_vort_levels
 
-# This is a function to get the ERAI variables required for tracking
-# The function takes the common_object that holds lat/lon information, the scenario type, and the date and time for the desired file
-# The function returns u, v, relative vorticity, and curvature vorticity on specific pressure levels
-
 
 def get_ERAI_variables(common_object, date_time):
+    """
+    Get the ERAI variables required for tracking.
+
+    This function takes the common_object that holds lat/lon information,
+    the date and time for the desired file. It returns u, v, relative
+    vorticity, and curvature vorticity on specific pressure levels.
+
+    Parameters:
+        common_object: Object containing common attributes such as lat/lon
+            information.
+        date_time (datetime.datetime): Date and time for the desired file.
+
+    Returns:
+        tuple: A tuple containing u, v, relative vorticity, and curvature
+        vorticity on specific pressure levels.
+    """
+
     # location of ERA-Interim data, which is in GRIB format
-    file_location = '/global/cscratch1/sd/ebercosh/Reanalysis/ERA-I/ei.oper.an.pl.regn128uv.'
+    file_location = '/global/cscratch1/sd/ebercosh/Reanalysis/ERA-I/'\
+        'ei.oper.an.pl.regn128uv.'
     # open file
     grbs = pygrib.open(file_location + date_time.strftime("%Y%m%d%H"))
 
@@ -539,19 +662,23 @@ def get_ERAI_variables(common_object, date_time):
     # 30, 25, and 23 correspond to 850, 700, and 600 hPa, respectively
     lev_list = [30, 25, 23]
 
-    u_levels_360 = np.zeros([3, grbs.select(name='U component of wind')[
-                            23].values.shape[0], grbs.select(name='U component of wind')[23].values.shape[1]])
+    u_levels_360 = np.zeros(
+        [3, grbs.select(name='U component of wind')[23].values.shape[0],
+         grbs.select(name='U component of wind')[23].values.shape[1]])
     v_levels_360 = np.zeros_like(u_levels_360)
     # get the desired pressure levels
     for level_index in range(0, 3):
-        # the ERA-Interim data goes from north to south. Use flip to flip it 180 degrees in the latitude dimension so that
+        # the ERA-Interim data goes from north to south. Use flip to flip it
+        # 180 degrees in the latitude dimension so that
         # the array now goes from south to north like the other datasets.
-        u_levels_360[level_index, :, :] = np.flip(grbs.select(name='U component of wind')[
-                                                  lev_list[level_index]].values, axis=0)
-        v_levels_360[level_index, :, :] = np.flip(grbs.select(name='V component of wind')[
-                                                  lev_list[level_index]].values, axis=0)
+        u_levels_360[level_index, :, :] = np.flip(
+            grbs.select(name='U component of wind')[
+                lev_list[level_index]].values, axis=0)
+        v_levels_360[level_index, :, :] = np.flip(grbs.select(
+            name='V component of wind')[lev_list[level_index]].values, axis=0)
 
-    # need to roll the u and v variables on the longitude axis because the longitudes were changed from
+    # need to roll the u and v variables on the longitude axis because the
+    # longitudes were changed from
     # 0-360 to -180 to 180
     u_levels = np.roll(u_levels_360, int(u_levels_360.shape[2]/2), axis=2)
     v_levels = np.roll(v_levels_360, int(v_levels_360.shape[2]/2), axis=2)
@@ -569,7 +696,8 @@ def get_ERAI_variables(common_object, date_time):
     rel_vort_levels = np.float32(rel_vort_levels)
     curve_vort_levels = np.float32(curve_vort_levels)
 
-    # make the arrays C contiguous (will need this later for the wrapped C smoothing function)
+    # make the arrays C contiguous
+    # (will need this later for the wrapped C smoothing function)
     u_levels = np.asarray(u_levels, order='C')
     v_levels = np.asarray(v_levels, order='C')
     rel_vort_levels = np.asarray(rel_vort_levels, order='C')
@@ -577,157 +705,254 @@ def get_ERAI_variables(common_object, date_time):
 
     return u_levels, v_levels, rel_vort_levels, curve_vort_levels
 
-# Calculate and return the relative vorticity. Relative vorticity is defined as
-# rel vort = dv/dx - du/dy. This function takes the 3-dimensional variables u and v,
-# ordered (lev, lat, lon), and the 2-dimensional variables latitude and longitude, ordered
-# (lat, lon), as parameters and returns the relative voriticty.
-
 
 def calc_rel_vort(u, v, lat, lon):
+    """
+    Calculate relative vorticity.
+
+    Relative vorticity (rel vort) is a measure of the rotation of a fluid
+    element with respect to its surroundings. It is defined as the difference
+    between the zonal (east-west) derivative of the meridional (north-south)
+    wind velocity and the meridional derivative of the zonal wind velocity.
+
+    Parameters:
+        u (numpy.ndarray): 	Zonal wind velocity component.
+                            Dimensions should be (lev, lat, lon).
+        v (numpy.ndarray): 	Meridional wind velocity component.
+                            Dimensions should be (lev, lat, lon).
+        lat (numpy.ndarray): Latitude values. Dimensions should be (lat, lon).
+        lon (numpy.ndarray): Longitude values. Dimensions should be (lat, lon).
+
+    Returns:
+        numpy.ndarray: Relative vorticity calculated as dv/dx - du/dy. 
+        Dimensions will be the same as the input arrays (lev, lat, lon).
+    """
+
     # take derivatives of u and v
     dv_dx = x_derivative(v, lat, lon)
     du_dy = y_derivative(u, lat)
     # subtract derivatives to calculate relative vorticity
     rel_vort = dv_dx - du_dy
-# print("rel_vort shape =", rel_vort.shape)
+    # print("rel_vort shape =", rel_vort.shape)
     return rel_vort
-
-# This function takes the derivative with respect to x (longitude).
-# The function takes a three-dimensional variable ordered lev, lat, lon
-# and returns d/dx of the variable.
 
 
 def x_derivative(variable, lat, lon):
+    """
+    Calculate the derivative of a variable with respect to longitude (x).
+
+    This function computes the derivative of the input variable with
+    respect to longitude, representing the rate of change of the variable
+    along the east-west direction.
+    It is calculated using centralfinite differences.
+
+    Parameters:
+        variable (numpy.ndarray): 	Three-dimensional variable
+                                    ordered lev, lat, lon.
+            It represents the field for which the derivative is computed.
+        lat (numpy.ndarray): Latitude values. Dimensions should be (lat, lon).
+        lon (numpy.ndarray): Longitude values. Dimensions should be (lat, lon).
+
+    Returns:
+        numpy.ndarray: 	The derivative of the variable with respect
+                        to longitude (x).
+                        It has the same dimensions as the input
+                        variable (lev, lat, lon).
+    """
     # subtract neighboring longitude points to get delta lon
     # then switch to radians
-    dlon = np.radians(lon[0, 2]-lon[0, 1])
-# print("dlon =", dlon)
+    dlon = np.radians(lon[0, 2] - lon[0, 1])
+
     # allocate space for d/dx array
     d_dx = np.zeros_like(variable)
-# print(d_dx.shape)
     # loop through latitudes
-    for nlat in range(0, len(lat[:, 0])):
-        # calculate dx by multiplying dlon by the radius of the Earth, 6367500 m, and the cos of the lat
+    for nlat in range(len(lat[:, 0])):
+        # calculate dx by multiplying dlon by the radius of the Earth,
+        # 6367500 m, and the cos of the lat
         # constant at this latitude
-        dx = 6367500.0*np.cos(np.radians(lat[nlat, 0]))*dlon
-        # print dx
+        dx = 6367500.0 * np.cos(np.radians(lat[nlat, 0])) * dlon
         # the variable will have dimensions lev, lat, lon
         grad = np.gradient(variable[:, nlat, :], dx)
         d_dx[:, nlat, :] = grad[1]
-# print(d_dx.shape)
-    return d_dx
 
-# This function takes the derivative with respect to y (latitude).
-# The function takes a 3 dimensional variable (lev, lat, lon) and
-# returns d/dy of the variable.
+    return d_dx
 
 
 def y_derivative(variable, lat):
+    """
+    Calculate the derivative of a variable with respect to latitude (y).
+
+    This function computes the derivative of the input variable with respect
+    to latitude, representing the rate of change of the variable along the
+    north-south direction. It is calculated using central finite differences.
+
+    Parameters:
+        variable (numpy.ndarray): 	Three-dimensional variable ordered
+            lev, lat, lon.It represents the field for which the derivative
+            is computed.
+        lat (numpy.ndarray): Latitude values. Dimensions should be (lat, lon).
+
+    Returns:
+        numpy.ndarray: The derivative of the variable with respect to
+            latitude (y). It has the same dimensions as the input variable
+            (lev, lat, lon).
+    """
     # subtract neighboring latitude points to get delta lat
     # then switch to radians
-    dlat = np.radians(lat[2, 0]-lat[1, 0])
-# print("dlat =", dlat)
+    dlat = np.radians(lat[2, 0] - lat[1, 0])
+
     # calculate dy by multiplying dlat by the radius of the Earth, 6367500 m
-    dy = 6367500.0*dlat
-# print("dy =", dy)
+    dy = 6367500.0 * dlat
+
     # calculate the d/dy derivative using the gradient function
-    # the gradient function will return a list of arrays of the same dimensions as the
-    # WRF variable, where each array is a derivative with respect to one of the dimensions
+    # the gradient function will return a list of arrays of the same
+    # dimensions as the WRF variable, where each array is a derivative with
+    # respect to one of the dimensions
     d_dy = np.gradient(variable, dy)
-    # print d_dy.shape
-    # print d_dy[1].shape
     # return the second item in the list, which is the d/dy array
     return d_dy[1]
 
-# This function calculates and returns the curvature vorticity.
-# The function takes hte common_object for lat/lon information, the zonal wind u,
-# the meridional wind v, and relative vorticity.
-
 
 def calc_curve_vort(common_object, u, v, rel_vort):
+    """
+    Calculate the curvature vorticity.
+
+    Curvature vorticity is a measure of the vorticity in a fluid flow field
+    that arises due to the curvature of the flow lines. It is computed as the
+    difference between the relative vorticity and the shear vorticity.
+
+    Parameters:
+        common_object (object): An object containing common properties such as
+            latitude and longitude. Assumed to have properties
+            common_object.lat and common_object.lon.
+        u (numpy.ndarray): Zonal wind velocity component.
+            Dimensions should be (lev, lat, lon).
+        v (numpy.ndarray): Meridional wind velocity component.
+            Dimensions should be (lev, lat, lon).
+        rel_vort (numpy.ndarray): Relative vorticity.
+            Dimensions should be the same as u and v.
+
+    Returns:
+        numpy.ndarray: Curvature vorticity calculated as the difference
+            between relative vorticity and shear vorticity.
+            It has the same dimensions as the input wind components
+            (lev, lat, lon).
+    """
     # calculate dx and dy
-    # subtract neighboring latitude points to get delta lat (dlat), then switch to radians
+    # subtract neighboring latitude points to get delta lat (dlat),
+    # then switch to radians
     dlat = np.radians(np.absolute(
-        common_object.lat[2, 0]-common_object.lat[1, 0]))
+        common_object.lat[2, 0] - common_object.lat[1, 0]))
     # calculate dy by multiplying dlat by the radius of the Earth, 6367500 m
     dy = np.full(
-        (common_object.lat.shape[0], common_object.lat.shape[1]), 6367500.0*dlat)
-    # subtract neighboring longitude points to get delta lon (dlon), then switch to radians
-# dlon = np.radians(np.absolute(common_object.lon[0,2]-common_object.lon[0,1]))
-    # calculate dx by taking the cosine of the lat (in radius) and muliply by dlat times the radius of the Earth, 6367500 m
-    dx = np.cos(np.radians(common_object.lat))*(dlat*6367500.0)
+        (common_object.lat.shape[0],
+         common_object.lat.shape[1]),
+        6367500.0 * dlat)
+    # calculate dx by taking the cosine of the lat (in radians) and
+    # multiply by dlat times the radius of the Earth, 6367500 m
+    dx = np.cos(np.radians(common_object.lat)) * (dlat * 6367500.0)
 
-    # calculate the magnitude of the wind vector sqrt(u^2+v^2), and then make u and v unit vectors
+    # calculate the magnitude of the wind vector sqrt(u^2+v^2), and
+    # then make u and v unit vectors
     vec_mag = np.sqrt(np.square(u) + np.square(v))
-    u_unit_vec = u/vec_mag
-    v_unit_vec = v/vec_mag
+    u_unit_vec = u / vec_mag
+    v_unit_vec = v / vec_mag
 
-    # calculate the shear vorticity first
+    # calculate the shear vorticity
     shear_vort = np.empty_like(u)
-    # loop through the latitudes and longitudes
-    for lon_index in range(0, u.shape[2]):  # loop through longitudes
-        for lat_index in range(0, u.shape[1]):  # loop through latitudes
-            # get the previous and next indices for the current lon_index and lat_index
-            # previous is the max of either lon_index-1, or zero (the first index)
-            lon_index_previous = max(lon_index-1, 0)
-            # next is the min of either lon_index+1, or u.shape[2]-1 (the last lon index)
-            lon_index_next = min(lon_index+1, u.shape[2]-1)
-            # previous is the max of either lat_index-1, or zero (the first index)
-            lat_index_previous = max(lat_index-1, 0)
-            # next is the min of either lat_index+1, or u.shape[1]-1 (the last lat index)
-            lat_index_next = min(lat_index+1, u.shape[1]-1)
-            # set some counters
+    for lon_index in range(u.shape[2]):  # loop through longitudes
+        for lat_index in range(u.shape[1]):  # loop through latitudes
+            # get the previous and next indices for the current lon_index
+            # and lat_index
+            lon_index_previous = max(lon_index - 1, 0)
+            lon_index_next = min(lon_index + 1, u.shape[2] - 1)
+            lat_index_previous = max(lat_index - 1, 0)
+            lat_index_next = min(lat_index + 1, u.shape[1] - 1)
+
             di = 0
             dj = 0
-            # calculate v1, v2, u1, and u2
-            v1 = ((u_unit_vec[:, lat_index, lon_index]*u[:, lat_index, lon_index_previous]) + (v_unit_vec[:,
-                  lat_index, lon_index]*v[:, lat_index, lon_index_previous]))*v_unit_vec[:, lat_index, lon_index]
+            v1 = ((u_unit_vec[:, lat_index, lon_index]
+                   * u[:, lat_index, lon_index_previous])
+                  + (v_unit_vec[:, lat_index, lon_index]
+                     * v[:, lat_index, lon_index_previous])) \
+                * v_unit_vec[:, lat_index, lon_index]
             if lon_index_previous != lon_index:
                 di += 1
 
-            v2 = ((u_unit_vec[:, lat_index, lon_index]*u[:, lat_index, lon_index_next]) + (v_unit_vec[:,
-                  lat_index, lon_index]*v[:, lat_index, lon_index_next]))*v_unit_vec[:, lat_index, lon_index]
+            v2 = ((u_unit_vec[:, lat_index, lon_index]
+                   * u[:, lat_index, lon_index_next])
+                  + (v_unit_vec[:, lat_index, lon_index]
+                     * v[:, lat_index, lon_index_next]))\
+                * v_unit_vec[:, lat_index, lon_index]
             if lon_index_next != lon_index:
                 di += 1
 
-            u1 = ((u_unit_vec[:, lat_index, lon_index]*u[:, lat_index_previous, lon_index]) + (v_unit_vec[:,
-                  lat_index, lon_index]*v[:, lat_index_previous, lon_index]))*u_unit_vec[:, lat_index, lon_index]
+            u1 = ((u_unit_vec[:, lat_index, lon_index]
+                   * u[:, lat_index_previous, lon_index])
+                  + (v_unit_vec[:, lat_index, lon_index]
+                     * v[:, lat_index_previous, lon_index]))\
+                * u_unit_vec[:, lat_index, lon_index]
             if lat_index_previous != lat_index:
                 dj += 1
 
-            u2 = ((u_unit_vec[:, lat_index, lon_index]*u[:, lat_index_next, lon_index]) + (v_unit_vec[:,
-                  lat_index, lon_index]*v[:, lat_index_next, lon_index]))*u_unit_vec[:, lat_index, lon_index]
+            u2 = ((u_unit_vec[:, lat_index, lon_index]
+                   * u[:, lat_index_next, lon_index])
+                  + (v_unit_vec[:, lat_index, lon_index]
+                     * v[:, lat_index_next, lon_index]))\
+                * u_unit_vec[:, lat_index, lon_index]
             if lat_index_next != lat_index:
                 dj += 1
-            # fill in the shear vorticity array
+
             if di > 0 and dj > 0:
                 shear_vort[:, lat_index, lon_index] = (
-                    (v2 - v1) / (float(di) * dx[lat_index, lon_index])) - ((u2 - u1) / (float(dj)*dy[lat_index, lon_index]))
+                    (v2 - v1) / (float(di) * dx[lat_index, lon_index]))\
+                    - ((u2 - u1) / (float(dj) * dy[lat_index, lon_index]))
 
-    # calculate curvature vorticity, where curvature vorticty = relative vorticity - shear vorticity
+    # calculate curvature vorticity
     curve_vort = rel_vort - shear_vort
 
     return curve_vort
 
-# This function is called from AEW_Tracks.py and is what begins the process of acquiring u, v, relative vorticity, and curvature vorticity
-# at various pressure levels. The function takes the common_object, the scenario type and date and time and returns the previoiusly mentioned variables.
-
 
 def get_variables(common_object, scenario_type, date_time):
+    """
+    Get wind components, relative vorticity, and curvature vorticity
+    from various atmospheric models.
+
+    This function is called from AEW_Tracks.py and initiates the process of
+    acquiring zonal wind velocity (u), meridional wind velocity (v),
+    relative vorticity, and curvature vorticity at various pressure levels.
+    It dispatches model-specific functions based on the model type provided
+    in common_object and returns the acquired variables.
+
+    Parameters:
+        common_object (object): An object containing common properties such
+            as model type.
+        scenario_type (str): The type of scenario.
+        date_time (datetime.datetime): Date and time for which the
+            variables are requested.
+
+    Returns:
+        tuple: A tuple containing the wind components (u_levels, v_levels),
+            relative vorticity (rel_vort_levels), and curvature vorticity
+            (curve_vort_levels). Each element in the tuple is a numpy.ndarray
+            with dimensions corresponding to pressure levels and
+            spatial coordinates.
+    """
     if common_object.model == 'WRF':
-        u_levels, v_levels, rel_vort_levels, curve_vort_levels = get_WRF_variables(
-            common_object, scenario_type, date_time)
+        u_levels, v_levels, rel_vort_levels, curve_vort_levels = \
+            get_WRF_variables(common_object, scenario_type, date_time)
     elif common_object.model == 'MERRA2':
-        u_levels, v_levels, rel_vort_levels, curve_vort_levels = get_MERRA2_variables(
-            common_object, date_time)
+        u_levels, v_levels, rel_vort_levels, curve_vort_levels = \
+            get_MERRA2_variables(common_object, date_time)
     elif common_object.model == 'CAM5':
-        u_levels, v_levels, rel_vort_levels, curve_vort_levels = get_CAM5_variables(
-            common_object, scenario_type, date_time)
+        u_levels, v_levels, rel_vort_levels, curve_vort_levels =\
+            get_CAM5_variables(common_object, scenario_type, date_time)
     elif common_object.model == 'ERA5':
-        u_levels, v_levels, rel_vort_levels, curve_vort_levels = get_ERA5_variables(
-            common_object, date_time)
+        u_levels, v_levels, rel_vort_levels, curve_vort_levels = \
+            get_ERA5_variables(common_object, date_time)
     elif common_object.model == 'ERAI':
-        u_levels, v_levels, rel_vort_levels, curve_vort_levels = get_ERAI_variables(
-            common_object, date_time)
+        u_levels, v_levels, rel_vort_levels, curve_vort_levels = \
+            get_ERAI_variables(common_object, date_time)
 
     return u_levels, v_levels, rel_vort_levels, curve_vort_levels

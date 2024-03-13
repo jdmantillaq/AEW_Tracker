@@ -1,6 +1,5 @@
 name: aewtrack
 channels:
-  - conda-forge
   - defaults
 dependencies:
   - _libgcc_mutex=0.1=main
@@ -100,4 +99,3 @@ dependencies:
     - setuptools-scm==6.3.2
     - tifffile==2021.11.2
     - tomli==1.2.2
-prefix: /home/dsuarez/miniconda3/envs/aewtrack
