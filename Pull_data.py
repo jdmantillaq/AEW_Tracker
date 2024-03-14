@@ -1,3 +1,4 @@
+#%%
 from __future__ import division  # makes division not round with integers
 import pygrib
 from netCDF4 import Dataset
@@ -144,44 +145,19 @@ def get_common_track_data(common_object):
         # but set dt to whatever the dt is for the dataset to be compared with
         # Eg dt=3 to compare with CAM5 or dt=6 to compare with WRF
         dt = 6  # time between files
-        file_location = '/mnt/DATASET/202007/ERA5_PL-20200701_0000.grib'
-        # file_location = '/global/cfs/projectdirs/m3522/cmip6/ERA5/'\
-        #     'e5.oper.an.pl/200509/'\
-        #     'e5.oper.an.pl.128_131_u.ll025uv.2005090100_2005090123.nc'
-
-        data = xr.open_dataset(file_location)
-        # get lat and lon values
-        # get the latitude and longitude at a single time
-        # (since they don't change with time)
-        # ordered lat, and going from north to south
-        # (so 90, 89, 88, .....-88, -89, -90)
-        lat_1d_n_s = data.latitude.values
-        lon_1d_360 = data.longitude.values  # ordered lon and goes from 0-360°
+        file_location = '/mnt/ERA5/202007/ERA5_PL-20200701_0000.grib'
+        grbs = pygrib.open(file_location)
+        grb = grbs.select(name='U component of wind')[23]
+        
+        # lat and lon are 2D, ordered lat, lon
+        # the lat goes from north to south (so 90, 89, 88, .....-88, -89, -90),
+        # and lon goes from 0-360 degrees
+        lat_2d_n_s, lon_2d_360 = grb.latlons()
         # make the lat array go from south to north
-        lat_1d = np.flip(lat_1d_n_s)
+        lat = np.flip(lat_2d_n_s, axis=0)
         # make the longitude go from -180 to 180 degrees
-        lon_1d = np.array([x - 180.0 for x in lon_1d_360])
+        lon = lon_2d_360 - 180.
 
-        # get north, south, east, west indices for cropping
-        lat_index_north_crop = (np.abs(lat_1d - north_lat_crop)).argmin()
-        lat_index_south_crop = (np.abs(lat_1d - south_lat_crop)).argmin()
-        lon_index_west_crop = (np.abs(lon_1d - west_lon_crop)).argmin()
-        lon_index_east_crop = (np.abs(lon_1d - east_lon_crop)).argmin()
-
-        # set the lat and lon cropping indices in common_object
-        common_object.lat_index_north_crop = lat_index_north_crop
-        common_object.lat_index_south_crop = lat_index_south_crop
-        common_object.lon_index_east_crop = lon_index_east_crop
-        common_object.lon_index_west_crop = lon_index_west_crop
-
-        # crop the lat and lon arrays. We don't need the entire global dataset
-        lat_1d_crop = lat_1d[lat_index_south_crop:lat_index_north_crop+1]
-        lon_1d_crop = lon_1d[lon_index_west_crop:lon_index_east_crop+1]
-
-        # make the lat and lon arrays from the GCM 2D (ordered lat, lon)
-        lon = np.tile(lon_1d_crop, (lat_1d_crop.shape[0], 1))
-        lat_2d = np.tile(lat_1d_crop, (len(lon_1d_crop), 1))
-        lat = np.rot90(lat_2d, 3)
         # switch lat and lon arrays to float32 instead of float64
         lat = np.float32(lat)
         lon = np.float32(lon)
@@ -190,10 +166,10 @@ def get_common_track_data(common_object):
         lon = np.asarray(lon, order='C')
 
         # get north, south, east, west indices for tracking
-        lat_index_north = (np.abs(lat_1d_crop - north_lat)).argmin()
-        lat_index_south = (np.abs(lat_1d_crop - south_lat)).argmin()
-        lon_index_west = (np.abs(lon_1d_crop - west_lon)).argmin()
-        lon_index_east = (np.abs(lon_1d_crop - east_lon)).argmin()
+        lat_index_north = (np.abs(lat[:, 0] - north_lat)).argmin()
+        lat_index_south = (np.abs(lat[:, 0] - south_lat)).argmin()
+        lon_index_west = (np.abs(lon[0, :] - west_lon)).argmin()
+        lon_index_east = (np.abs(lon[0, :] - east_lon)).argmin()
 
         # the total number of degrees in the longitude dimension
         lon_degrees = np.abs(lon[0, 0] - lon[0, -1])
@@ -671,7 +647,7 @@ def calc_rel_vort(u, v, lat, lon):
         lon (numpy.ndarray): Longitude values. Dimensions should be (lat, lon).
 
     Returns:
-        numpy.ndarray: Relative vorticity calculated as dv/dx - du/dy. 
+        numpy.ndarray: Relative vorticity calculated as dv/dx - du/dy.
         Dimensions will be the same as the input arrays (lev, lat, lon).
     """
 
@@ -680,7 +656,6 @@ def calc_rel_vort(u, v, lat, lon):
     du_dy = y_derivative(u, lat)
     # subtract derivatives to calculate relative vorticity
     rel_vort = dv_dx - du_dy
-    # print("rel_vort shape =", rel_vort.shape)
     return rel_vort
 
 
@@ -715,8 +690,7 @@ def x_derivative(variable, lat, lon):
     # loop through latitudes
     for nlat in range(len(lat[:, 0])):
         # calculate dx by multiplying dlon by the radius of the Earth,
-        # 6367500 m, and the cos of the lat
-        # constant at this latitude
+        # 6367500 m, and the cos of the lat constant at this latitude
         dx = 6367500.0 * np.cos(np.radians(lat[nlat, 0])) * dlon
         # the variable will have dimensions lev, lat, lon
         grad = np.gradient(variable[:, nlat, :], dx)
@@ -903,3 +877,5 @@ def get_variables(common_object, scenario_type, date_time):
             get_ERAI_variables(common_object, date_time)
 
     return u_levels, v_levels, rel_vort_levels, curve_vort_levels
+
+# %%

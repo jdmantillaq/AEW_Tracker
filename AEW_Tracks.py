@@ -1,3 +1,4 @@
+#%%
 from __future__ import division  # makes division not round with integers 
 import os
 import pickle
@@ -30,6 +31,7 @@ from Pull_data import *
 from scipy.ndimage import gaussian_filter
 import ctypes
 import numpy.ctypeslib as ctl
+#%%
 
 # AEW_Tracks.py is the main program for the AEW tracking algorithm. The model type, scenario type, and year are parsed from the command line.
 # The timeframe over which AEW tracks are found can be modified in main and is typically set to run from May - October. The output of this 
