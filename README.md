@@ -14,6 +14,8 @@ The AEW Tracker algorithm consists of several components:
 -   **C_circle_functions.c**: This C program contains the circular smoothing algorithm used for data processing. It needs to be compiled into a shared library (`C_circle_functions.so`) before running the main program.
     
 -   **Pull_data.py**: This script handles the retrieval of data required for AEW tracking. It may need adjustments to the data locations depending on where the data is stored.
+
+-   **Tracking_functions.py**: This file contains all the functions related to the identification and tracking algorithms of the AEW. It includes functions for smoothing, finding starting points, combining potential locations, filtering tracks, advecting tracks, and more.
     
 
 ## Usage
