@@ -526,68 +526,37 @@ def get_ERA5_variables(common_object, date_time):
     """
 
     # location of ERA5 files
+    file_location = '/mnt/ERA5/'
+    # open file
+    tempofile = f'{file_location}{date_time.strftime("%Y%m")}/'\
+        f'{date_time.strftime("%Y%m%d")}_{date_time.strftime("%H")}00.grib'
+    print(tempofile)
+    grbs = pygrib.open(tempofile)
 
-    u_file_location = '/global/cfs/projectdirs/m3522/cmip6/ERA5/'\
-        'e5.oper.an.pl/' + \
-        date_time.strftime("%Y%m") + '/e5.oper.an.pl.128_131_u.ll025uv.'
-    v_file_location = '/global/cfs/projectdirs/m3522/cmip6/ERA5/'\
-        'e5.oper.an.pl/' + \
-        date_time.strftime("%Y%m") + '/e5.oper.an.pl.128_132_v.ll025uv.'
-    # open files
-    u_data = xr.open_dataset(u_file_location + date_time.strftime(
-        "%Y%m%d") + '00_' + date_time.strftime("%Y%m%d") + '23.nc')
-    v_data = xr.open_dataset(v_file_location + date_time.strftime(
-        "%Y%m%d") + '00_' + date_time.strftime("%Y%m%d") + '23.nc')
-    # get u and v
-    print("Pulling variables...")
-    # ERA5 is hourly. To compare with CAM5, which is 3 hourly,
-    # average every three hours together (eg 00, 01, and 02 are averaged)
-    # to make the comparison easier. To compare with WRF, which is 6 hourly,
-    # average every six hours. The averaging is controlled by
-    # what is set at dt in the common_object (eg dt=3 for CAM5 or dt=6 for WRF)
-    u_3d = u_data.U[int(date_time.strftime("%H")), :, :, :]
-    v_3d = v_data.V[int(date_time.strftime("%H")), :, :, :]
-    # get u and v only on the levels 850, 700, and 600 hPa
-    lev_list = [850, 700, 600]
-    u_levels_360 = np.zeros([3, u_3d.shape[1], u_3d.shape[2]])
-    v_levels_360 = np.zeros([3, v_3d.shape[1], v_3d.shape[2]])
-    for level_index in range(0, 3):
+    # pressure list
+    # 30, 25, and 23 correspond to 850, 700, and 600 hPa, respectively
+    lev_list = [30, 25, 23]
+
+    u_levels_360 = np.zeros(
+        [3, grbs.select(name='U component of wind')[
+            23].values.shape[0], grbs.select(
+                name='U component of wind')[23].values.shape[1]])
+    v_levels_360 = np.zeros_like(u_levels_360)
+    # get the desired pressure levels
+    for i, level_i in enumerate(lev_list):
         # the ERA5 data goes from north to south. Use flip to flip it
         # 180 degrees in the latitude dimension so that
         # the array now goes from south to north like the other datasets.
-        u_levels_360[level_index, :, :] = np.flip(
-            u_3d.sel(level=lev_list[level_index]), axis=0)
-        v_levels_360[level_index, :, :] = np.flip(
-            v_3d.sel(level=lev_list[level_index]), axis=0)
+        u_levels_360[i, :, :] = np.flip(
+            grbs.select(name='U component of wind')[level_i].values, axis=0)
+        v_levels_360[i, :, :] = np.flip(
+            grbs.select(name='V component of wind')[level_i].values, axis=0)
+
     # need to roll the u and v variables on the longitude axis because the
-    # longitudes were changed from 0-360 to -180 to 180
-    u_levels_full = np.roll(u_levels_360, int(u_levels_360.shape[2]/2), axis=2)
-    v_levels_full = np.roll(v_levels_360, int(v_levels_360.shape[2]/2), axis=2)
-
-    # Crop the data. This is a global dataset and we don't need to calculate
-    # vorticity values over the entire globe, only over the region of interest.
-    # The tracking algorithm only looks over Africa/the Atlantic,
-    # so it's unnecessary to have a global dataset.
-    u_levels = u_levels_full[
-        :,
-        common_object.lat_index_south_crop:common_object.lat_index_north_crop
-        + 1,
-        common_object.lon_index_west_crop:common_object.lon_index_east_crop+1]
-    v_levels = v_levels_full[
-        :,
-        common_object.lat_index_south_crop:common_object.lat_index_north_crop
-        + 1,
-        common_object.lon_index_west_crop:common_object.lon_index_east_crop+1]
-
-    # get rid of any NANs
-    if np.isnan(u_levels).any():
-        mask_u = np.isnan(u_levels)
-        u_levels[mask_u] = np.interp(np.flatnonzero(
-            mask_u), np.flatnonzero(~mask_u), u_levels[~mask_u])
-    if np.isnan(v_levels).any():
-        mask_v = np.isnan(v_levels)
-        v_levels[mask_v] = np.interp(np.flatnonzero(
-            mask_v), np.flatnonzero(~mask_v), v_levels[~mask_v])
+    # longitudes were changed from
+    # 0-360 to -180 to 180
+    u_levels = np.roll(u_levels_360, int(u_levels_360.shape[2]/2), axis=2)
+    v_levels = np.roll(v_levels_360, int(v_levels_360.shape[2]/2), axis=2)
 
     # calculate the relative vorticity
     rel_vort_levels = calc_rel_vort(
