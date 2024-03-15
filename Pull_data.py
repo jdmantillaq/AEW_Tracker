@@ -1,15 +1,31 @@
-#%%
+# %%
 from __future__ import division  # makes division not round with integers
+import matplotlib.pyplot as plt
 import pygrib
 from netCDF4 import Dataset
 import numpy as np
 import xarray as xr
 import wrf as wrf
+import pandas as pd
 
-# Pull_data.py contains functions that are used by AEW_Tracks.py. All of the
-# functions in Pull_Data.py aid in the pulling of variables and formatting
-# them to be in a common format so AEW_Tracks.py does not need to know what
-# model the data came from.
+# Assuming 'year' and 'common_object.dt' are defined somewhere in your code
+year = 2022  # Example year
+time_interval_hours = 6  # Example time interval in hours
+
+# Create a DatetimeIndex with specified frequency
+start_date = pd.Timestamp(year, 5, 1)
+end_date = pd.Timestamp(year, 11, 1)
+date_range = pd.date_range(
+    start=start_date, end=end_date, freq=f'{time_interval_hours}H')
+# %%
+
+
+'''
+Pull_data.py contains functions that are used by AEW_Tracks.py. All of the
+functions in Pull_Data.py aid in the pulling of variables and formatting
+them to be in a common format so AEW_Tracks.py does not need to know what
+model the data came from.
+'''
 
 
 def get_common_track_data(common_object):
@@ -146,9 +162,10 @@ def get_common_track_data(common_object):
         # Eg dt=3 to compare with CAM5 or dt=6 to compare with WRF
         dt = 6  # time between files
         file_location = '/mnt/ERA5/202007/ERA5_PL-20200701_0000.grib'
-        grbs = pygrib.open(file_location)
-        grb = grbs.select(name='U component of wind')[23]
-        
+        fileidx = pygrib.open(file_location)
+        grb = fileidx.select(name='U component of wind',
+                            typeOfLevel='isobaricInhPa', level=850)[0]
+
         # lat and lon are 2D, ordered lat, lon
         # the lat goes from north to south (so 90, 89, 88, .....-88, -89, -90),
         # and lon goes from 0-360 degrees
@@ -156,7 +173,8 @@ def get_common_track_data(common_object):
         # make the lat array go from south to north
         lat = np.flip(lat_2d_n_s, axis=0)
         # make the longitude go from -180 to 180 degrees
-        lon = lon_2d_360 - 180.
+        lon = np.copy(lon_2d_360)
+        lon[lon > 180] = lon[lon > 180] - 360
 
         # switch lat and lon arrays to float32 instead of float64
         lat = np.float32(lat)
@@ -505,28 +523,34 @@ def get_ERA5_variables(common_object, date_time):
     file_location = '/mnt/ERA5/'
     # open file
     tempofile = f'{file_location}{date_time.strftime("%Y%m")}/'\
-        f'{date_time.strftime("%Y%m%d")}_{date_time.strftime("%H")}00.grib'
+        f'ERA5_PL-{date_time.strftime("%Y%m%d_%H")}00.grib'
     print(tempofile)
-    grbs = pygrib.open(tempofile)
+    fileidx = pygrib.open(tempofile)
+
+    grb = fileidx.select(name='U component of wind',
+                         typeOfLevel='isobaricInhPa', level=850)[0]
+    latd, lond = grb.values.shape
 
     # pressure list
     # 30, 25, and 23 correspond to 850, 700, and 600 hPa, respectively
-    lev_list = [30, 25, 23]
+    # lev_list = [30, 25, 23]
+    # lev_list = [6, 11, 13]
+    lev_list = [850, 700, 600]
 
-    u_levels_360 = np.zeros(
-        [3, grbs.select(name='U component of wind')[
-            23].values.shape[0], grbs.select(
-                name='U component of wind')[23].values.shape[1]])
+    u_levels_360 = np.zeros([3, latd, lond])
     v_levels_360 = np.zeros_like(u_levels_360)
     # get the desired pressure levels
     for i, level_i in enumerate(lev_list):
         # the ERA5 data goes from north to south. Use flip to flip it
         # 180 degrees in the latitude dimension so that
         # the array now goes from south to north like the other datasets.
-        u_levels_360[i, :, :] = np.flip(
-            grbs.select(name='U component of wind')[level_i].values, axis=0)
-        v_levels_360[i, :, :] = np.flip(
-            grbs.select(name='V component of wind')[level_i].values, axis=0)
+        u_levels_360[i, :, :] = np.flip(fileidx.select(
+            name='U component of wind',
+            typeOfLevel='isobaricInhPa', level=level_i)[0].values, axis=0)
+        v_levels_360[i, :, :] = np.flip(fileidx.select(
+            name='V component of wind',
+            typeOfLevel='isobaricInhPa',
+            level=level_i)[0].values, axis=0)
 
     # need to roll the u and v variables on the longitude axis because the
     # longitudes were changed from
@@ -877,5 +901,96 @@ def get_variables(common_object, scenario_type, date_time):
             get_ERAI_variables(common_object, date_time)
 
     return u_levels, v_levels, rel_vort_levels, curve_vort_levels
+
+# %%
+
+
+def get_data_3D(path_file, name, typeOfLevel, region, level):
+
+    if level == None:
+        str_levels = ['1000', '950', '900', '850', '800', '750', '700', '650', '600', '550', '500',
+                      '450', '400', '350', '300', '250', '200', '150', '100']
+        levels = [float(l) for l in str_levels]
+    else:
+        str_levels = [str(level)]
+        levels = [float(l) for l in str_levels]
+
+    data_r = []
+    for level in levels:
+        fileidx = pygrib.open(path_file)
+        grb = fileidx.select(
+            name=name, typeOfLevel=typeOfLevel, level=level)[0]
+        data = grb.values[::-1, :]
+
+        lat = grb['distinctLatitudes'][::-1]
+        lon = grb['distinctLongitudes']-360.
+
+        lat1, lat2 = find_nearest(lat, region['latmin'], region['latmax'])[0:2]
+        lon1, lon2 = find_nearest(lon, region['lonmin'], region['lonmax'])[
+            0:2]  # con estos si toca ser mas excata por la resta
+        data = data[lat1:lat2+1, lon1:lon2+1]
+        data_r.append(data)
+
+    lat = lat[lat1:lat2+1]
+    lon = lon[lon1:lon2+1]
+    data_f = np.zeros([len(levels), len(lat), len(lon)])
+
+    for i in range(len(levels)):
+        data_f[i, :, :] = data_r[i]
+
+    return levels, lon, lat, data_f
+
+
+# %%
+
+import matplotlib.pyplot as plt
+
+date_time = date_range[0]
+# location of ERA5 files
+file_location = '/mnt/ERA5/'
+# open file
+tempofile = f'{file_location}{date_time.strftime("%Y%m")}/'\
+    f'ERA5_PL-{date_time.strftime("%Y%m%d_%H")}00.grib'
+print(tempofile)
+
+
+fileidx = pygrib.open(tempofile)
+
+# pressure list (hPa)
+lev_list = [850, 700, 600]
+
+# Select the specific variable for U and V components of wind
+u_grbs = [fileidx.select(name='U component of wind',
+                         typeOfLevel='isobaricInhPa',
+                         level=level)[0] for level in lev_list]
+v_grbs = [fileidx.select(name='V component of wind',
+                         typeOfLevel='isobaricInhPa',
+                         level=level)[0] for level in lev_list]
+
+# Extract latitudes and longitudes
+lat_2d_n_s, lon_2d_360 = u_grbs[0].latlons()
+latd, lond = u_grbs[0].values.shape
+lat = np.flip(lat_2d_n_s, axis=0)
+lon = np.where(lon_2d_360 > 180, lon_2d_360 - 360, lon_2d_360)
+
+# Plot contour for U component of wind at the first pressure level
+plt.contourf(lon[0, :], lat[:, 0], u_grbs[0].values)
+
+# Initialize arrays for U and V component of wind at each pressure level
+u_levels_360 = np.zeros([len(lev_list), latd, lond])
+v_levels_360 = np.zeros_like(u_levels_360)
+
+# Retrieve U and V component of wind at each pressure level
+for i, (u_grb, v_grb) in enumerate(zip(u_grbs, v_grbs)):
+    u_levels_360[i, :, :] = np.flip(u_grb.values, axis=0)
+    v_levels_360[i, :, :] = np.flip(v_grb.values, axis=0)
+
+# Roll the longitude axis for U and V variables
+u_levels = np.roll(u_levels_360, int(u_levels_360.shape[2] / 2), axis=2)
+v_levels = np.roll(v_levels_360, int(v_levels_360.shape[2] / 2), axis=2)
+
+#%%
+plt.contourf(lon, lat, u_levels[0])
+
 
 # %%
