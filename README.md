@@ -22,8 +22,6 @@ The AEW Tracker algorithm consists of several components:
 
 To run the AEW Tracker, use the following command format:
 
-arduinoCopy code
-
 `python AEW_Tracks.py --model 'WRF' --scenario 'late_century' --year '2010'` 
 
 Make sure to adjust the model type, scenario type, and year according to your analysis needs.
