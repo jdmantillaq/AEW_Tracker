@@ -8,15 +8,16 @@ import wrf as wrf
 import pandas as pd
 
 import matplotlib.pyplot as plt
-# # Assuming 'year' and 'common_object.dt' are defined somewhere in your code
-# year = 2022  # Example year
-# time_interval_hours = 6  # Example time interval in hours
 
-# # Create a DatetimeIndex with specified frequency
-# start_date = pd.Timestamp(year, 5, 1)
-# end_date = pd.Timestamp(year, 11, 1)
-# date_range = pd.date_range(
-#     start=start_date, end=end_date, freq=f'{time_interval_hours}H')
+# Assuming 'year' and 'common_object.dt' are defined somewhere in your code
+year = 2022  # Example year
+time_interval_hours = 6  # Example time interval in hours
+
+# Create a DatetimeIndex with specified frequency
+start_date = pd.Timestamp(year, 5, 1)
+end_date = pd.Timestamp(year, 11, 1)
+date_range = pd.date_range(
+    start=start_date, end=end_date, freq=f'{time_interval_hours}H')
 # %%
 
 
@@ -537,10 +538,7 @@ def get_ERA5_variables(common_object, date_time):
                              level=level)[0] for level in lev_list]
 
     # Extract latitudes and longitudes
-    # lat_2d_n_s, lon_2d_360 = u_grbs[0].latlons()
     latd, lond = u_grbs[0].values.shape
-    # lat = np.flip(lat_2d_n_s, axis=0)
-    # lon = np.where(lon_2d_360 > 180, lon_2d_360 - 360, lon_2d_360)
 
     # Initialize arrays for U and V component of wind at each pressure level
     u_levels = np.zeros([len(lev_list), latd, lond])
@@ -701,17 +699,21 @@ def x_derivative(variable, lat, lon):
     # subtract neighboring longitude points to get delta lon
     # then switch to radians
     dlon = np.radians(lon[0, 2] - lon[0, 1])
-
-    # allocate space for d/dx array
+    
+    # Calculate the radius of the Earth at the latitude
+    radius = 6367500.0 * np.cos(np.radians(lat[:, 0]))
+    
+    # Allocate space for the derivative array
     d_dx = np.zeros_like(variable)
-    # loop through latitudes
+    
+    # Loop through latitudes
     for nlat in range(len(lat[:, 0])):
-        # calculate dx by multiplying dlon by the radius of the Earth,
-        # 6367500 m, and the cos of the lat constant at this latitude
-        dx = 6367500.0 * np.cos(np.radians(lat[nlat, 0])) * dlon
-        # the variable will have dimensions lev, lat, lon
-        grad = np.gradient(variable[:, nlat, :], dx)
-        d_dx[:, nlat, :] = grad[1]
+        # Calculate dx for this latitude
+        dx = radius[nlat] * dlon
+        # Compute the gradient along the longitude axis
+        grad = np.gradient(variable[:, nlat, :], dx, axis=1)
+        # Store the derivative with respect to longitude
+        d_dx[:, nlat, :] = grad
 
     return d_dx
 
@@ -725,15 +727,15 @@ def y_derivative(variable, lat):
     north-south direction. It is calculated using central finite differences.
 
     Parameters:
-        variable (numpy.ndarray): 	Three-dimensional variable ordered
-            lev, lat, lon.It represents the field for which the derivative
-            is computed.
+        variable (numpy.ndarray):    Three-dimensional variable ordered
+                                    lev, lat, lon. It represents the field
+                                    for which the derivative is computed.
         lat (numpy.ndarray): Latitude values. Dimensions should be (lat, lon).
 
     Returns:
         numpy.ndarray: The derivative of the variable with respect to
-            latitude (y). It has the same dimensions as the input variable
-            (lev, lat, lon).
+                        latitude (y). It has the same dimensions as the
+                        input variable (lev, lat, lon).
     """
     # subtract neighboring latitude points to get delta lat
     # then switch to radians
@@ -746,9 +748,10 @@ def y_derivative(variable, lat):
     # the gradient function will return a list of arrays of the same
     # dimensions as the WRF variable, where each array is a derivative with
     # respect to one of the dimensions
-    d_dy = np.gradient(variable, dy)
-    # return the second item in the list, which is the d/dy array
-    return d_dy[1]
+    d_dy = np.gradient(variable, dy, axis=1)
+
+    # Return the derivative with respect to latitude
+    return d_dy
 
 
 def calc_curve_vort(common_object, u, v, rel_vort):
@@ -898,95 +901,97 @@ def get_variables(common_object, scenario_type, date_time):
 # %%
 
 
-def get_data_3D(path_file, name, typeOfLevel, region, level):
+# def get_data_3D(path_file, name, typeOfLevel, region, level):
 
-    if level == None:
-        str_levels = ['1000', '950', '900', '850', '800', '750', '700', '650', '600', '550', '500',
-                      '450', '400', '350', '300', '250', '200', '150', '100']
-        levels = [float(l) for l in str_levels]
-    else:
-        str_levels = [str(level)]
-        levels = [float(l) for l in str_levels]
+#     if level == None:
+#         str_levels = ['1000', '950', '900', '850', '800', '750',
+#                       '700', '650', '600', '550', '500', '450',
+#                       '400', '350', '300', '250', '200', '150',
+#                       '100']
+#         levels = [float(l) for l in str_levels]
+#     else:
+#         str_levels = [str(level)]
+#         levels = [float(l) for l in str_levels]
 
-    data_r = []
-    for level in levels:
-        fileidx = pygrib.open(path_file)
-        grb = fileidx.select(
-            name=name, typeOfLevel=typeOfLevel, level=level)[0]
-        data = grb.values[::-1, :]
+#     data_r = []
+#     for level in levels:
+#         fileidx = pygrib.open(path_file)
+#         grb = fileidx.select(
+#             name=name, typeOfLevel=typeOfLevel, level=level)[0]
+#         data = grb.values[::-1, :]
 
-        lat = grb['distinctLatitudes'][::-1]
-        lon = grb['distinctLongitudes']-360.
+#         lat = grb['distinctLatitudes'][::-1]
+#         lon = grb['distinctLongitudes']-360.
 
-        lat1, lat2 = find_nearest(lat, region['latmin'], region['latmax'])[0:2]
-        lon1, lon2 = find_nearest(lon, region['lonmin'], region['lonmax'])[
-            0:2]  # con estos si toca ser mas excata por la resta
-        data = data[lat1:lat2+1, lon1:lon2+1]
-        data_r.append(data)
+#         lat1, lat2 = find_nearest(lat, region['latmin'], region['latmax'])[0:2]
+#         lon1, lon2 = find_nearest(lon, region['lonmin'], region['lonmax'])[
+#             0:2]  # con estos si toca ser mas excata por la resta
+#         data = data[lat1:lat2+1, lon1:lon2+1]
+#         data_r.append(data)
 
-    lat = lat[lat1:lat2+1]
-    lon = lon[lon1:lon2+1]
-    data_f = np.zeros([len(levels), len(lat), len(lon)])
+#     lat = lat[lat1:lat2+1]
+#     lon = lon[lon1:lon2+1]
+#     data_f = np.zeros([len(levels), len(lat), len(lon)])
 
-    for i in range(len(levels)):
-        data_f[i, :, :] = data_r[i]
+#     for i in range(len(levels)):
+#         data_f[i, :, :] = data_r[i]
 
-    return levels, lon, lat, data_f
+#     return levels, lon, lat, data_f
 
 
 # %%
 
 
-# date_time = date_range[0]
-# # location of ERA5 files
-# file_location = '/mnt/ERA5/'
-# # open file
-# tempofile = f'{file_location}{date_time.strftime("%Y%m")}/'\
-#     f'ERA5_PL-{date_time.strftime("%Y%m%d_%H")}00.grib'
-# print(tempofile)
+date_time = date_range[0]
+# location of ERA5 files
+file_location = '/mnt/ERA5/'
+# open file
+tempofile = f'{file_location}{date_time.strftime("%Y%m")}/'\
+    f'ERA5_PL-{date_time.strftime("%Y%m%d_%H")}00.grib'
+print(tempofile)
 
 
-# fileidx = pygrib.open(tempofile)
+fileidx = pygrib.open(tempofile)
 
-# # pressure list (hPa)
-# lev_list = [850, 700, 600]
+# pressure list (hPa)
+lev_list = [850, 700, 600]
 
-# # Select the specific variable for U and V components of wind
-# u_grbs = [fileidx.select(name='U component of wind',
-#                          typeOfLevel='isobaricInhPa',
-#                          level=level)[0] for level in lev_list]
-# v_grbs = [fileidx.select(name='V component of wind',
-#                          typeOfLevel='isobaricInhPa',
-#                          level=level)[0] for level in lev_list]
+# Select the specific variable for U and V components of wind
+u_grbs = [fileidx.select(name='U component of wind',
+                         typeOfLevel='isobaricInhPa',
+                         level=level)[0] for level in lev_list]
+v_grbs = [fileidx.select(name='V component of wind',
+                         typeOfLevel='isobaricInhPa',
+                         level=level)[0] for level in lev_list]
 
-# # Extract latitudes and longitudes
-# lat_2d_n_s, lon_2d_360 = u_grbs[0].latlons()
-# latd, lond = u_grbs[0].values.shape
-# lat = np.flip(lat_2d_n_s, axis=0)
-# lon = np.where(lon_2d_360 > 180, lon_2d_360 - 360, lon_2d_360)
-# levels = np.linspace(-42, 42)
-# # Plot contour for U component of wind at the first pressure level
-# plt.contourf(lon[0, :], lat[:, 0], u_grbs[0].values, levels, cmap='RdBu_r')
+# Extract latitudes and longitudes
+lat_2d_n_s, lon_2d_360 = u_grbs[0].latlons()
+latd, lond = u_grbs[0].values.shape
+lat = np.flip(lat_2d_n_s, axis=0)
+lon = np.where(lon_2d_360 > 180, lon_2d_360 - 360, lon_2d_360)
+levels = np.linspace(-42, 42)
+# Plot contour for U component of wind at the first pressure level
+plt.contourf(lon[0, :], lat[:, 0], u_grbs[0].values, levels, cmap='RdBu_r')
 
-# # Initialize arrays for U and V component of wind at each pressure level
-# u_levels_360 = np.zeros([len(lev_list), latd, lond])
-# v_levels_360 = np.zeros_like(u_levels_360)
+# Initialize arrays for U and V component of wind at each pressure level
+u_levels_360 = np.zeros([len(lev_list), latd, lond])
+v_levels_360 = np.zeros_like(u_levels_360)
 
-# # Retrieve U and V component of wind at each pressure level
-# for i, (u_grb, v_grb) in enumerate(zip(u_grbs, v_grbs)):
-#     u_levels_360[i, :, :] = np.flip(u_grb.values, axis=0)
-#     v_levels_360[i, :, :] = np.flip(v_grb.values, axis=0)
+# Retrieve U and V component of wind at each pressure level
+for i, (u_grb, v_grb) in enumerate(zip(u_grbs, v_grbs)):
+    u_levels_360[i, :, :] = np.flip(u_grb.values, axis=0)
+    v_levels_360[i, :, :] = np.flip(v_grb.values, axis=0)
 
-#     # u_levels_360[i, :, :] = u_grb.values
-#     # v_levels_360[i, :, :] = v_grb.values
+    # u_levels_360[i, :, :] = u_grb.values
+    # v_levels_360[i, :, :] = v_grb.values
 
 
-# # Roll the longitude axis for U and V variables
-# # u_levels = np.roll(u_levels_360, int(u_levels_360.shape[2] / 2), axis=2)
-# # v_levels = np.roll(v_levels_360, int(v_levels_360.shape[2] / 2), axis=2)
+# Roll the longitude axis for U and V variables
+# u_levels = np.roll(u_levels_360, int(u_levels_360.shape[2] / 2), axis=2)
+# v_levels = np.roll(v_levels_360, int(v_levels_360.shape[2] / 2), axis=2)
 
-# plt.figure()
-# plt.contourf(lon, lat, u_levels_360[0], levels, cmap='RdBu_r')
+plt.figure()
+plt.contourf(lon, lat, u_levels_360[0], levels, cmap='RdBu_r')
 # # %%
 
 
@@ -1001,3 +1006,51 @@ def get_data_3D(path_file, name, typeOfLevel, region, level):
 # var_values = ds_era.u.sel(isobaricInhPa=850).values
 # yy = ds_era.latitude.values
 # xx = ds_era.longitude.values
+
+
+#%%
+
+# Calculate the delta longitude in radians
+dlon = np.radians(lon[0, 2] - lon[0, 1])
+
+
+
+#%%
+variable = u_levels_360
+d_dx = np.zeros_like(variable)
+dlon = np.radians(lon[0, 2] - lon[0, 1])
+for nlat in range(len(lat[:, 0])):
+    # calculate dx by multiplying dlon by the radius of the Earth,
+    # 6367500 m, and the cos of the lat constant at this latitude
+    dx = 6367500.0 * np.cos(np.radians(lat[nlat, 0])) * dlon
+    # the variable will have dimensions lev, lat, lon
+    grad = np.gradient(variable[:, nlat, :], dx)
+    d_dx[:, nlat, :] = grad[1]
+#%%
+
+# Calculate the radius of the Earth at the latitude
+radius = 6367500.0 * np.cos(np.radians(lat[:, 0]))
+# Allocate space for the derivative array
+d_dx = np.zeros_like(variable)
+for nlat in range(len(lat[:, 0])):
+    # Calculate dx for this latitude
+    dx = radius[nlat] * dlon
+    # Compute the gradient along the longitude axis
+    grad = np.gradient(variable[:, nlat, :], dx, axis=1)
+    # Store the derivative with respect to longitude
+    d_dx[:, nlat, :] = grad
+
+#%%
+dlat = np.radians(lat[2, 0] - lat[1, 0])
+
+# calculate dy by multiplying dlat by the radius of the Earth, 6367500 m
+dy = 6367500.0 * dlat
+
+# calculate the d/dy derivative using the gradient function
+# the gradient function will return a list of arrays of the same
+# dimensions as the WRF variable, where each array is a derivative with
+# respect to one of the dimensions
+d_dy = np.gradient(variable, dy)[1]
+d_dy = np.gradient(variable, dy, axis=1)
+d_dy
+# %%
