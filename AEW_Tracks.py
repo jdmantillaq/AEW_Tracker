@@ -14,7 +14,9 @@ from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
 from Tracking_functions import *
 from Pull_data import *
 import ctypes
+import pandas as pd
 import numpy.ctypeslib as ctl
+# from numba import jit
 # %%
 
 '''
@@ -29,7 +31,6 @@ python AEW_Tracks.py --model 'WRF' --scenario 'late_century' --year '2010'
 
 ruta_savea = '/home/cambio_climatico/AEW_Tracker/Data/'
 ruta_figus = '/home/cambio_climatico/AEW_Tracker/Figures/'
-
 
 class Common_track_data:
     """
@@ -244,7 +245,8 @@ def c_smooth(common_object, var, radius):
     return smoothed_var
 
 
-def main():
+if __name__ == '__main__':
+    # def main():
     """
     Entry point of the AEW Tracker program.
 
@@ -276,30 +278,31 @@ def main():
 
     # set up argparse, which lets command line entries define variable_type
     # and scenario_type
-    parser = argparse.ArgumentParser(description='AEW Tracker.')
-    parser.add_argument(
-        '--model', dest='model_type',
-        help='Get the model type for the data (WRF, CAM5, ERA5)',
-        required=True)
-    parser.add_argument(
-        '--scenario', dest='scenario_type',
-        help='Get the scenario type to be used ' +
-             '(Historical, late_century, Plus30)',
-        required=True)
-    parser.add_argument('--year', dest='year',
-                        help='Get the year of interest', required=True)
-    args = parser.parse_args()
 
-    # set the model type that is parsed from the command line
-    model_type = args.model_type
-    # set the scenario type that is parsed from the command line
-    scenario_type = args.scenario_type
-    # set the year that is parsed from the command line
-    year = args.year
+    # parser = argparse.ArgumentParser(description='AEW Tracker.')
+    # parser.add_argument(
+    #     '--model', dest='model_type',
+    #     help='Get the model type for the data (WRF, CAM5, ERA5)',
+    #     required=True)
+    # parser.add_argument(
+    #     '--scenario', dest='scenario_type',
+    #     help='Get the scenario type to be used ' +
+    #          '(Historical, late_century, Plus30)',
+    #     required=True)
+    # parser.add_argument('--year', dest='year',
+    #                     help='Get the year of interest', required=True)
+    # args = parser.parse_args()
 
-    # model_type = 'WRF' #'WRF' #'MERRA2' #'CAM5' #'ERA5' #'ERAI'
-    # scenario_type = 'late_century'  #'Historical' #'Plus30' # 'late_century'
-    # year = 2010
+    # # set the model type that is parsed from the command line
+    # model_type = args.model_type
+    # # set the scenario type that is parsed from the command line
+    # scenario_type = args.scenario_type
+    # # set the year that is parsed from the command line
+    # year = args.year
+
+    model_type = 'ERA5'  # 'WRF' #'MERRA2' #'CAM5' #'ERA5' #'ERAI'
+    scenario_type = 'late_century'  # 'Historical' #'Plus30' # 'late_century'
+    year = 2010
 
     # set radius in km for smoothing and for finding points that belong
     # to the same track
@@ -328,9 +331,14 @@ def main():
     get_common_track_data(common_object)
 
     # set time information
-    times = np.arange(datetime(int(year), 5, 1, 0),
-                      datetime(int(year), 11, 1, 0),
-                      timedelta(hours=common_object.dt)).astype(datetime)
+    # times = np.arange(datetime(int(year), 5, 1, 0),
+    #                   datetime(int(year), 11, 1, 0),
+    #                   timedelta(hours=common_object.dt)).astype(datetime)
+
+    start_date = pd.Timestamp(year, 5, 1)
+    end_date = pd.Timestamp(year, 11, 1)
+    times = pd.date_range(
+        start=start_date, end=end_date, freq=f'{common_object.dt}h')
 
     # # May - October (AEW seasn)
     # times = np.arange(datetime(int(year), 6, 1, 0),
@@ -352,8 +360,8 @@ def main():
     finished_AEW_tracks_list = []
 
     # loop through all times and find AEW tracks
-    for time_index in range(0, times.shape[0]):
-        print(times[time_index].strftime('%Y-%m-%d_%H'))
+    for time_index, time_i in enumerate(times):
+        print(time_i.strftime('%Y-%m-%d %H:%M:%S'))
 
         # get variables for each time step
         u_3d, v_3d, rel_vort_3d, curve_vort_3d = get_variables(
@@ -363,16 +371,24 @@ def main():
         print("Smoothing...")
         curve_vort_smooth = c_smooth(
             common_object, curve_vort_3d, common_object.radius*1.5)
+        
+        coords = {'time': time_i,
+                  'lat': (['lat', 'lon'], common_object.lat),
+                  'lon': (['lat', 'lon'], common_object.lon)}
+        
+        curve_vort_smooth_ds = xr.DataArray(
+            curve_vort_smooth, coords=coords, name='curve_vort_smooth')
 
         # curve_vort_smooth_delta = xr.Dataset({'curve_vort_smooth':
-        #                                       (['lev', 'y', 'x'],
+        #                                       (['lev', 'lat', 'lon'],
         #                                        curve_vort_smooth)})
-        # coords = {'time': time, 'lat': (['y', 'x'], wrf_lat[0, :, :]),
-        #           'lon': (['y', 'x'], wrf_lon[0, :, :])}
+        
         # curve_vort_smooth_delta.to_netcdf('curve_vort_smooth_C_cam.nc')
 
         rel_vort_smooth = c_smooth(
             common_object, rel_vort_3d, common_object.radius*1.5)
+        
+        a
 
         # Find new starting points
         print("Get starting targets...")
@@ -587,6 +603,6 @@ def main():
     pickle.dump(finished_AEW_tracks_list, tracks_file)
 
 
-if __name__ == '__main__':
-    main()
+# if __name__ == '__main__':
+#     main()
 # %%
