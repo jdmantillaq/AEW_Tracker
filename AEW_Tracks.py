@@ -27,6 +27,9 @@ given time period. To run the program, for example, type:
 python AEW_Tracks.py --model 'WRF' --scenario 'late_century' --year '2010'
 '''
 
+ruta_savea = '/home/cambio_climatico/AEW_Tracker/Data/'
+ruta_figus = '/home/cambio_climatico/AEW_Tracker/Figures/'
+
 
 class Common_track_data:
     """
@@ -270,7 +273,7 @@ def main():
     Saves the finished AEW tracks to a file.
     Plots the AEW tracks on a map.
     """
-    
+
     # set up argparse, which lets command line entries define variable_type
     # and scenario_type
     parser = argparse.ArgumentParser(description='AEW Tracker.')
@@ -586,4 +589,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-#%%
+# %%

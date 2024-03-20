@@ -1,24 +1,23 @@
 # %%
 from __future__ import division  # makes division not round with integers
+from numba import jit
 import pygrib
 from netCDF4 import Dataset
 import numpy as np
 import xarray as xr
 import wrf as wrf
-import pandas as pd
+# import pandas as pd
+# import matplotlib.pyplot as plt
 
-import matplotlib.pyplot as plt
+# # Assuming 'year' and 'common_object.dt' are defined somewhere in your code
+# year = 2022  # Example year
+# time_interval_hours = 6  # Example time interval in hours
 
-# Assuming 'year' and 'common_object.dt' are defined somewhere in your code
-year = 2022  # Example year
-time_interval_hours = 6  # Example time interval in hours
-
-# Create a DatetimeIndex with specified frequency
-start_date = pd.Timestamp(year, 5, 1)
-end_date = pd.Timestamp(year, 11, 1)
-date_range = pd.date_range(
-    start=start_date, end=end_date, freq=f'{time_interval_hours}H')
-# %%
+# # Create a DatetimeIndex with specified frequency
+# start_date = pd.Timestamp(year, 5, 1)
+# end_date = pd.Timestamp(year, 11, 1)
+# date_range = pd.date_range(
+#     start=start_date, end=end_date, freq=f'{time_interval_hours}H')
 
 
 '''
@@ -163,8 +162,8 @@ def get_common_track_data(common_object):
         # Eg dt=3 to compare with CAM5 or dt=6 to compare with WRF
         dt = 6  # time between files
         file_location = '/mnt/ERA5/202007/ERA5_PL-20200701_0000.grib'
-        
-        fileidx = pygrib.open(tempofile)
+
+        fileidx = pygrib.open(file_location)
 
         # Select the specific variable for U and V components of wind
         grb = fileidx.select(name='U component of wind',
@@ -174,7 +173,7 @@ def get_common_track_data(common_object):
         lat_2d_n_s, lon_2d_360 = grb.latlons()
         lat = np.flip(lat_2d_n_s, axis=0)
         lon = np.where(lon_2d_360 > 180, lon_2d_360 - 360, lon_2d_360)
-        
+
         # switch lat and lon arrays to float32 instead of float64
         lat = np.float32(lat)
         lon = np.float32(lon)
@@ -553,7 +552,7 @@ def get_ERA5_variables(common_object, date_time):
     rel_vort_levels = calc_rel_vort(
         u_levels, v_levels, common_object.lat, common_object.lon)
     # calculate the curvature voriticty
-    curve_vort_levels = calc_curve_vort(
+    curve_vort_levels = calc_curve_vort_numba(
         common_object, u_levels, v_levels, rel_vort_levels)
 
     # switch the arrays to be float32 instead of float64
@@ -644,6 +643,7 @@ def get_ERAI_variables(common_object, date_time):
     return u_levels, v_levels, rel_vort_levels, curve_vort_levels
 
 
+@jit
 def calc_rel_vort(u, v, lat, lon):
     """
     Calculate relative vorticity.
@@ -667,13 +667,15 @@ def calc_rel_vort(u, v, lat, lon):
     """
 
     # take derivatives of u and v
-    dv_dx = x_derivative(v, lat, lon)
-    du_dy = y_derivative(u, lat)
+    dv_dx = x_derivative(v.copy(), lat, lon)
+    du_dy = y_derivative(u.copy(), lat)
+
     # subtract derivatives to calculate relative vorticity
     rel_vort = dv_dx - du_dy
     return rel_vort
 
 
+@jit
 def x_derivative(variable, lat, lon):
     """
     Calculate the derivative of a variable with respect to longitude (x).
@@ -699,13 +701,13 @@ def x_derivative(variable, lat, lon):
     # subtract neighboring longitude points to get delta lon
     # then switch to radians
     dlon = np.radians(lon[0, 2] - lon[0, 1])
-    
+
     # Calculate the radius of the Earth at the latitude
     radius = 6367500.0 * np.cos(np.radians(lat[:, 0]))
-    
+
     # Allocate space for the derivative array
     d_dx = np.zeros_like(variable)
-    
+
     # Loop through latitudes
     for nlat in range(len(lat[:, 0])):
         # Calculate dx for this latitude
@@ -718,6 +720,7 @@ def x_derivative(variable, lat, lon):
     return d_dx
 
 
+@jit
 def y_derivative(variable, lat):
     """
     Calculate the derivative of a variable with respect to latitude (y).
@@ -855,6 +858,105 @@ def calc_curve_vort(common_object, u, v, rel_vort):
     return curve_vort
 
 
+def calc_curve_vort_numba(common_object, u, v, rel_vort):
+    """
+    Calculate the curvature vorticity.
+
+    Curvature vorticity is a measure of the vorticity in a fluid flow field
+    that arises due to the curvature of the flow lines. It is computed as the
+    difference between the relative vorticity and the shear vorticity.
+
+    Parameters:
+        common_object (object): An object containing common properties such as
+            latitude and longitude. Assumed to have properties
+            common_object.lat and common_object.lon.
+        u (numpy.ndarray): Zonal wind velocity component.
+            Dimensions should be (lev, lat, lon).
+        v (numpy.ndarray): Meridional wind velocity component.
+            Dimensions should be (lev, lat, lon).
+        rel_vort (numpy.ndarray): Relative vorticity.
+            Dimensions should be the same as u and v.
+
+    Returns:
+        numpy.ndarray: Curvature vorticity calculated as the difference
+            between relative vorticity and shear vorticity.
+            It has the same dimensions as the input wind components
+            (lev, lat, lon).
+    """
+
+    # Pre-calculate constants outside the jit-decorated function
+    dlat = np.radians(np.absolute(
+        common_object.lat[2, 0] - common_object.lat[1, 0]))
+    earth_radius = 6367500.0
+
+    @jit
+    def calc_shear_vort(u, v, rel_vort):
+        dy = np.full((common_object.lat.shape[0],
+                      common_object.lat.shape[1]), earth_radius * dlat)
+        dx = np.cos(np.radians(common_object.lat)) * (dy)
+
+        vec_mag = np.sqrt(np.square(u) + np.square(v))
+        u_unit_vec = u / vec_mag
+        v_unit_vec = v / vec_mag
+
+        shear_vort = np.empty_like(u)
+        for lon_index in range(u.shape[2]):
+            for lat_index in range(u.shape[1]):
+                lon_index_previous = max(lon_index - 1, 0)
+                lon_index_next = min(lon_index + 1, u.shape[2] - 1)
+                lat_index_previous = max(lat_index - 1, 0)
+                lat_index_next = min(lat_index + 1, u.shape[1] - 1)
+
+                di = 0
+                dj = 0
+                v1 = ((u_unit_vec[:, lat_index, lon_index]
+                       * u[:, lat_index, lon_index_previous])
+                      + (v_unit_vec[:, lat_index, lon_index]
+                         * v[:, lat_index, lon_index_previous])) \
+                    * v_unit_vec[:, lat_index, lon_index]
+                if lon_index_previous != lon_index:
+                    di += 1
+
+                v2 = ((u_unit_vec[:, lat_index, lon_index]
+                       * u[:, lat_index, lon_index_next])
+                      + (v_unit_vec[:, lat_index, lon_index]
+                         * v[:, lat_index, lon_index_next]))\
+                    * v_unit_vec[:, lat_index, lon_index]
+                if lon_index_next != lon_index:
+                    di += 1
+
+                u1 = ((u_unit_vec[:, lat_index, lon_index]
+                       * u[:, lat_index_previous, lon_index])
+                      + (v_unit_vec[:, lat_index, lon_index]
+                         * v[:, lat_index_previous, lon_index]))\
+                    * u_unit_vec[:, lat_index, lon_index]
+                if lat_index_previous != lat_index:
+                    dj += 1
+
+                u2 = ((u_unit_vec[:, lat_index, lon_index]
+                       * u[:, lat_index_next, lon_index])
+                      + (v_unit_vec[:, lat_index, lon_index]
+                         * v[:, lat_index_next, lon_index])) \
+                    * u_unit_vec[:, lat_index, lon_index]
+                if lat_index_next != lat_index:
+                    dj += 1
+
+                if di > 0 and dj > 0:
+                    shear_vort[:, lat_index, lon_index] = (
+                        (v2 - v1) / (float(di) * dx[lat_index, lon_index])) \
+                        - ((u2 - u1) / (float(dj) * dy[lat_index, lon_index]))
+
+        return shear_vort
+
+    # Calculate shear vorticity
+    shear_vort = calc_shear_vort(u.copy(), v.copy(), rel_vort.copy())
+
+    # Calculate curvature vorticity
+    curve_vort = rel_vort - shear_vort
+
+    return curve_vort
+
+
 def get_variables(common_object, scenario_type, date_time):
     """
     Get wind components, relative vorticity, and curvature vorticity
@@ -923,7 +1025,8 @@ def get_variables(common_object, scenario_type, date_time):
 #         lat = grb['distinctLatitudes'][::-1]
 #         lon = grb['distinctLongitudes']-360.
 
-#         lat1, lat2 = find_nearest(lat, region['latmin'], region['latmax'])[0:2]
+#         lat1, lat2 = find_nearest(lat, region['latmin'], region['latmax'])
+# [0:2]
 #         lon1, lon2 = find_nearest(lon, region['lonmin'], region['lonmax'])[
 #             0:2]  # con estos si toca ser mas excata por la resta
 #         data = data[lat1:lat2+1, lon1:lon2+1]
@@ -942,115 +1045,98 @@ def get_variables(common_object, scenario_type, date_time):
 # %%
 
 
-date_time = date_range[0]
-# location of ERA5 files
-file_location = '/mnt/ERA5/'
-# open file
-tempofile = f'{file_location}{date_time.strftime("%Y%m")}/'\
-    f'ERA5_PL-{date_time.strftime("%Y%m%d_%H")}00.grib'
-print(tempofile)
+# date_time = date_range[0]
+# # location of ERA5 files
+# file_location = '/mnt/ERA5/'
+# # open file
+# tempofile = f'{file_location}{date_time.strftime("%Y%m")}/'\
+#     f'ERA5_PL-{date_time.strftime("%Y%m%d_%H")}00.grib'
+# print(tempofile)
 
 
-fileidx = pygrib.open(tempofile)
+# fileidx = pygrib.open(tempofile)
 
-# pressure list (hPa)
-lev_list = [850, 700, 600]
+# # pressure list (hPa)
+# lev_list = [850, 700, 600]
 
-# Select the specific variable for U and V components of wind
-u_grbs = [fileidx.select(name='U component of wind',
-                         typeOfLevel='isobaricInhPa',
-                         level=level)[0] for level in lev_list]
-v_grbs = [fileidx.select(name='V component of wind',
-                         typeOfLevel='isobaricInhPa',
-                         level=level)[0] for level in lev_list]
+# # Select the specific variable for U and V components of wind
+# u_grbs = [fileidx.select(name='U component of wind',
+#                          typeOfLevel='isobaricInhPa',
+#                          level=level)[0] for level in lev_list]
+# v_grbs = [fileidx.select(name='V component of wind',
+#                          typeOfLevel='isobaricInhPa',
+#                          level=level)[0] for level in lev_list]
 
-# Extract latitudes and longitudes
-lat_2d_n_s, lon_2d_360 = u_grbs[0].latlons()
-latd, lond = u_grbs[0].values.shape
-lat = np.flip(lat_2d_n_s, axis=0)
-lon = np.where(lon_2d_360 > 180, lon_2d_360 - 360, lon_2d_360)
-levels = np.linspace(-42, 42)
-# Plot contour for U component of wind at the first pressure level
-plt.contourf(lon[0, :], lat[:, 0], u_grbs[0].values, levels, cmap='RdBu_r')
+# # Extract latitudes and longitudes
+# lat_2d_n_s, lon_2d_360 = u_grbs[0].latlons()
+# latd, lond = u_grbs[0].values.shape
+# lat = np.flip(lat_2d_n_s, axis=0)
+# lon = np.where(lon_2d_360 > 180, lon_2d_360 - 360, lon_2d_360)
+# levels = np.linspace(-42, 42)
+# # Plot contour for U component of wind at the first pressure level
+# plt.contourf(lon[0, :], lat[:, 0], u_grbs[0].values, levels, cmap='RdBu_r')
 
-# Initialize arrays for U and V component of wind at each pressure level
-u_levels_360 = np.zeros([len(lev_list), latd, lond])
-v_levels_360 = np.zeros_like(u_levels_360)
+# # Initialize arrays for U and V component of wind at each pressure level
+# u_levels_360 = np.zeros([len(lev_list), latd, lond])
+# v_levels_360 = np.zeros_like(u_levels_360)
 
-# Retrieve U and V component of wind at each pressure level
-for i, (u_grb, v_grb) in enumerate(zip(u_grbs, v_grbs)):
-    u_levels_360[i, :, :] = np.flip(u_grb.values, axis=0)
-    v_levels_360[i, :, :] = np.flip(v_grb.values, axis=0)
+# # Retrieve U and V component of wind at each pressure level
+# for i, (u_grb, v_grb) in enumerate(zip(u_grbs, v_grbs)):
+#     u_levels_360[i, :, :] = np.flip(u_grb.values, axis=0)
+#     v_levels_360[i, :, :] = np.flip(v_grb.values, axis=0)
 
-    # u_levels_360[i, :, :] = u_grb.values
-    # v_levels_360[i, :, :] = v_grb.values
+#     # u_levels_360[i, :, :] = u_grb.values
+#     # v_levels_360[i, :, :] = v_grb.values
 
 
-# Roll the longitude axis for U and V variables
-# u_levels = np.roll(u_levels_360, int(u_levels_360.shape[2] / 2), axis=2)
-# v_levels = np.roll(v_levels_360, int(v_levels_360.shape[2] / 2), axis=2)
+# # Roll the longitude axis for U and V variables
+# # u_levels = np.roll(u_levels_360, int(u_levels_360.shape[2] / 2), axis=2)
+# # v_levels = np.roll(v_levels_360, int(v_levels_360.shape[2] / 2), axis=2)
 
-plt.figure()
-plt.contourf(lon, lat, u_levels_360[0], levels, cmap='RdBu_r')
+# plt.figure()
+# plt.contourf(lon, lat, u_levels_360[0], levels, cmap='RdBu_r')
+# # # %%
+
+
+# # # %%
+
+# # ds_era = xr.load_dataset(
+# #     filename_or_obj=tempofile,
+# #     engine="cfgrib")
+
+# # ds_era.u.sel(isobaricInhPa=850).plot()
+
+# # var_values = ds_era.u.sel(isobaricInhPa=850).values
+# # yy = ds_era.latitude.values
+# # xx = ds_era.longitude.values
+
+
 # # %%
 
+# rel_vort = calc_rel_vort(u=u_levels_360, v=v_levels_360, lat=lat, lon=lon)
 
 # # %%
-
-# ds_era = xr.load_dataset(
-#     filename_or_obj=tempofile,
-#     engine="cfgrib")
-
-# ds_era.u.sel(isobaricInhPa=850).plot()
-
-# var_values = ds_era.u.sel(isobaricInhPa=850).values
-# yy = ds_era.latitude.values
-# xx = ds_era.longitude.values
+# curve_vort_2 = calc_curve_vort_2(lat, u=u_levels_360, v=v_levels_360,
+#                                  rel_vort=rel_vort)
 
 
-#%%
+# # %%
+# curve_vort_3 = calc_curve_vort_3(lat, u=u_levels_360, v=v_levels_360,
+#                                  rel_vort=rel_vort)
+# # %%
 
-# Calculate the delta longitude in radians
-dlon = np.radians(lon[0, 2] - lon[0, 1])
+# start_time = time.time()
+# curve_vort_2 = calc_curve_vort_2(
+#     lat, u=u_levels_360, v=v_levels_360, rel_vort=rel_vort)
+# end_time = time.time()
 
+# execution_time = end_time - start_time
+# print("Execution time for calc_curve_vort_2:", execution_time)
 
+# start_time = time.time()
+# curve_vort_3 = calc_curve_vort_3(
+#     lat, u=u_levels_360, v=v_levels_360, rel_vort=rel_vort)
+# end_time = time.time()
 
-#%%
-variable = u_levels_360
-d_dx = np.zeros_like(variable)
-dlon = np.radians(lon[0, 2] - lon[0, 1])
-for nlat in range(len(lat[:, 0])):
-    # calculate dx by multiplying dlon by the radius of the Earth,
-    # 6367500 m, and the cos of the lat constant at this latitude
-    dx = 6367500.0 * np.cos(np.radians(lat[nlat, 0])) * dlon
-    # the variable will have dimensions lev, lat, lon
-    grad = np.gradient(variable[:, nlat, :], dx)
-    d_dx[:, nlat, :] = grad[1]
-#%%
-
-# Calculate the radius of the Earth at the latitude
-radius = 6367500.0 * np.cos(np.radians(lat[:, 0]))
-# Allocate space for the derivative array
-d_dx = np.zeros_like(variable)
-for nlat in range(len(lat[:, 0])):
-    # Calculate dx for this latitude
-    dx = radius[nlat] * dlon
-    # Compute the gradient along the longitude axis
-    grad = np.gradient(variable[:, nlat, :], dx, axis=1)
-    # Store the derivative with respect to longitude
-    d_dx[:, nlat, :] = grad
-
-#%%
-dlat = np.radians(lat[2, 0] - lat[1, 0])
-
-# calculate dy by multiplying dlat by the radius of the Earth, 6367500 m
-dy = 6367500.0 * dlat
-
-# calculate the d/dy derivative using the gradient function
-# the gradient function will return a list of arrays of the same
-# dimensions as the WRF variable, where each array is a derivative with
-# respect to one of the dimensions
-d_dy = np.gradient(variable, dy)[1]
-d_dy = np.gradient(variable, dy, axis=1)
-d_dy
-# %%
+# execution_time = end_time - start_time
+# print("Execution time for calc_curve_vort_3:", execution_time)
