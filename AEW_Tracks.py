@@ -10,14 +10,27 @@ import matplotlib.ticker as mticker
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
-# from Circle_functions import *
-from Tracking_functions import *
-from Pull_data import *
+from numba import jit
 import ctypes
 import pandas as pd
 import numpy.ctypeslib as ctl
-# from numba import jit
-# %%
+import xarray as xr
+import Tracking_functions as track
+import Pull_data as pull
+# from Tracking_functions import *
+# from Pull_data import *
+
+
+# import math as math
+# from skimage.feature import peak_local_max
+# from scipy.spatial import cKDTree
+# from math import inf
+# from collections.abc import Iterable
+
+
+# import pygrib
+# from netCDF4 import Dataset
+
 
 '''
 AEW_Tracks.py is the main program for the AEW tracking algorithm.
@@ -29,8 +42,26 @@ given time period. To run the program, for example, type:
 python AEW_Tracks.py --model 'WRF' --scenario 'late_century' --year '2010'
 '''
 
-ruta_savea = '/home/cambio_climatico/AEW_Tracker/Data/'
-ruta_figus = '/home/cambio_climatico/AEW_Tracker/Figures/'
+
+def create_path(path):
+    """
+    Create a directory at the specified path if it does not already exist.
+
+    Parameters:
+    - path (str): The path of the directory to be created.
+    """
+    import os
+    os.makedirs(path, exist_ok=True)
+
+
+# Define the path for the data directory relative to the script directory
+path_data = os.path.join(os.path.dirname(__file__), 'Data/')
+path_fig = os.path.join(os.path.dirname(__file__), 'Figures/')
+
+# Create the directories (if it doesn't exist)
+create_path(path_data)
+create_path(path_fig)
+
 
 class Common_track_data:
     """
@@ -170,12 +201,15 @@ def plot_points_map(aew_track_list, scenario_type, model_type):
     colors = plt.cm.rainbow(np.linspace(0, 1, len(aew_track_list)))
     color_index = 0
     for aew_track in aew_track_list:
-        # colors = plt.cm.rainbow_r(np.linspace(0, 1, len(aew_track.latlon_list)))
+        # colors = plt.cm.rainbow_r(np.linspace(0, 1,
+        # len(aew_track.latlon_list)))
         # color_index = 0
         track_color = colors[color_index]
 
-        # unzip list of lat/lon tuples into a list of two lists. The first list is all of the lats and the
-        # second list is all of the lons. Then create separate lists with the lats and the lons used for plotting.
+        # unzip list of lat/lon tuples into a list of two lists.
+        # The first list is all of the lats and the second list is all of
+        # the lons. Then create separate lists with the lats and the lons
+        # used for plotting.
         track_latlons = [list(t) for t in zip(*aew_track.latlon_list)]
         track_lats = track_latlons[0]
         track_lons = track_latlons[1]
@@ -183,21 +217,27 @@ def plot_points_map(aew_track_list, scenario_type, model_type):
         plt.scatter(track_lons, track_lats, color=track_color,
                     linewidth=0.25, marker='o', transform=ccrs.Geodetic())
         plt.plot(track_lons, track_lats, color=track_color, linewidth=1,
-                 label=aew_track.time_list[0].strftime('%Y-%m-%d_%H'), transform=ccrs.Geodetic())
+                 label=aew_track.time_list[0].strftime('%Y-%m-%d_%H'),
+                 transform=ccrs.Geodetic())
         del track_latlons
         del track_lats
         del track_lons
 
 # for lat_lon_pair in aew_track.latlon_list:
-# plt.scatter(lat_lon_pair[1],lat_lon_pair[0], color=colors[color_index], linewidth=2, marker='o',transform=ccrs.Geodetic())
-# plt.scatter(lat_lon_pair[1],lat_lon_pair[0], color=track_color, linewidth=1, marker='o',transform=ccrs.Geodetic())
-# plt.plot(lat_lon_pair[1],lat_lon_pair[0], color=track_color, linewidth=1, transform=ccrs.Geodetic())
+# plt.scatter(lat_lon_pair[1],lat_lon_pair[0], color=colors[color_index],
+# linewidth=2, marker='o',transform=ccrs.Geodetic())
+# plt.scatter(lat_lon_pair[1],lat_lon_pair[0], color=track_color, linewidth=1,
+# marker='o',transform=ccrs.Geodetic())
+# plt.plot(lat_lon_pair[1],lat_lon_pair[0], color=track_color, linewidth=1,
+# transform=ccrs.Geodetic())
         color_index += 1
-# plt.scatter(next_max_locs_lons, next_max_locs_lats, color='red', linewidth=2, marker='o',transform=ccrs.Geodetic())
-# plt.legend(loc="upper left", ncol = 3, fontsize = 'xx-small') # upper left or best location for legend, 3 columns, xx-small fontsize
+# plt.scatter(next_max_locs_lons, next_max_locs_lats, color='red', linewidth=2,
+# marker='o',transform=ccrs.Geodetic())
+# plt.legend(loc="upper left", ncol = 3, fontsize = 'xx-small')
+# # upper left or best location for legend, 3 columns, xx-small fontsize
 # plt.show()
-    fig.savefig(model_type + '_' + scenario_type +
-                '_AEW_Tracks.pdf', bbox_inches='tight')
+    fig.savefig(f'{model_type}_{scenario_type}_AEW_Tracks.pdf',
+                bbox_inches='tight')
 
 
 def c_smooth(common_object, var, radius):
@@ -328,7 +368,7 @@ if __name__ == '__main__':
     common_object.radius = radius_km
     # get the common track data (like lat and lon) and assign it to the
     # appropriate attributes in common_object
-    get_common_track_data(common_object)
+    pull.get_common_track_data(common_object)
 
     # set time information
     # times = np.arange(datetime(int(year), 5, 1, 0),
@@ -364,42 +404,37 @@ if __name__ == '__main__':
         print(time_i.strftime('%Y-%m-%d %H:%M:%S'))
 
         # get variables for each time step
-        u_3d, v_3d, rel_vort_3d, curve_vort_3d = get_variables(
+        u_3d, v_3d, rel_vort_3d, curve_vort_3d = pull.get_variables(
             common_object, scenario_type, times[time_index])
 
         # smooth the curvature and relative vorticities
         print("Smoothing...")
         curve_vort_smooth = c_smooth(
             common_object, curve_vort_3d, common_object.radius*1.5)
-        
-        coords = {'time': time_i,
-                  'lat': (['lat', 'lon'], common_object.lat),
-                  'lon': (['lat', 'lon'], common_object.lon)}
-        
-        curve_vort_smooth_ds = xr.DataArray(
-            curve_vort_smooth, coords=coords, name='curve_vort_smooth')
-
-        # curve_vort_smooth_delta = xr.Dataset({'curve_vort_smooth':
-        #                                       (['lev', 'lat', 'lon'],
-        #                                        curve_vort_smooth)})
-        
-        # curve_vort_smooth_delta.to_netcdf('curve_vort_smooth_C_cam.nc')
-
         rel_vort_smooth = c_smooth(
             common_object, rel_vort_3d, common_object.radius*1.5)
+
+        # coords = {'time': time_i,
+        #           'lat': (['lat', 'lon'], common_object.lat),
+        #           'lon': (['lat', 'lon'], common_object.lon)}
+
+        # curve_vort_smooth_ds = xr.DataArray(
+        #     curve_vort_smooth, coords=coords, name='curve_vort_smooth')
         
-        a
 
         # Find new starting points
         print("Get starting targets...")
-        # ,lon_index_west, lat_index_south, lon_index_east, lat_index_north)
-        unique_max_locs = get_starting_targets(
-            common_object, curve_vort_smooth)
+        # (lon_index_west, lat_index_south, lon_index_east, lat_index_north)
+        unique_max_locs = track.get_starting_targets(common_object,
+                                                     curve_vort_smooth,
+                                                     level=700)
 
         # Combine potential locations into tracked locations
         print("Get multi positions...")
-        alternative_unique_max_locs = get_multi_positions(
+        alternative_unique_max_locs = track.get_multi_positions(
             common_object, curve_vort_smooth, rel_vort_smooth, unique_max_locs)
+        
+        a
 
         # Remove duplicate locations
         # The 99999999 is the starting value for unique_loc_number;
@@ -412,7 +447,7 @@ if __name__ == '__main__':
         # use the following conditional to catch the case where there is only
         # one location, in which case we don't need to use unique_locations
         if len(unique_max_locs+alternative_unique_max_locs) > 1:
-            combined_unique_max_locs = unique_locations(
+            combined_unique_max_locs = track.unique_locations(
                 unique_max_locs+alternative_unique_max_locs,
                 common_object.radius, 99999999)
         else:
@@ -436,7 +471,7 @@ if __name__ == '__main__':
                 # lat/lon location and then check to make sure that
                 # the new track locations aren't duplicates of existing track
                 # objects
-                unique_track_locations(
+                track.unique_track_locations(
                     track_object, combined_unique_max_locs,
                     current_time_index, common_object.radius)
 
@@ -465,11 +500,11 @@ if __name__ == '__main__':
         # in the for statement causes track objects to be skipped
         for track_object in list(AEW_tracks_list):
             # assign a magnitude from the vorticity to each lat/lon point
-            assign_magnitude(common_object, curve_vort_smooth,
-                             rel_vort_smooth, track_object)
+            track.assign_magnitude(common_object, curve_vort_smooth,
+                                   rel_vort_smooth, track_object)
             # filter tracks. A track is either removed entirely, or removed as
             # an acitve track and added to a finished track list.
-            filter_result = filter_tracks(common_object, track_object)
+            filter_result = track.filter_tracks(common_object, track_object)
             # or filter_result.reject_track_speed:
             if filter_result.reject_track_direction:
                 print("in reject track")
@@ -485,8 +520,8 @@ if __name__ == '__main__':
                 continue
             del filter_result
             # advect tracks
-            advect_tracks(common_object, u_3d, v_3d,
-                          track_object, times, time_index)
+            track.advect_tracks(common_object, u_3d, v_3d,
+                                track_object, times, time_index)
 
         print("Length of AEW_tracks_list =", len(AEW_tracks_list))
         print("Length of finished_AEW_tracks_list =",
@@ -598,9 +633,10 @@ if __name__ == '__main__':
 
     # save tracks to file
     # 'wb' means write binary, if just 'w' is used, a string is expected
-    tracks_file = open(model_type + '_' + scenario_type +
-                       '_AEW_tracks_' + year + '_May-Oct.obj', 'wb')
+    tracks_file = open(f'{model_type}_{scenario_type}_'
+                       'AEW_tracks_{year}_May-Oct.obj', 'wb')
     pickle.dump(finished_AEW_tracks_list, tracks_file)
+    a
 
 
 # if __name__ == '__main__':

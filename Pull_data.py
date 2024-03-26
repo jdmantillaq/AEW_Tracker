@@ -57,7 +57,7 @@ def get_common_track_data(common_object):
     south_lat_crop = -20.
     west_lon_crop = -80.  # 90
     east_lon_crop = 40.
-    
+
     # Pressure levels at which to retrieve data (hPa)
     level = [850, 700, 600]
 
@@ -98,7 +98,7 @@ def get_common_track_data(common_object):
     common_object.lat = lat  # switch from float64 to float32
     common_object.lon = lon  # switch from float64 to float32
     common_object.level = lon = np.float32(level)
-    
+
     # set the lat and lon indices in common_object
     common_object.lat_index_north = lat_index_north
     common_object.lat_index_south = lat_index_south
