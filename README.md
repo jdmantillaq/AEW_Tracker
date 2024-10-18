@@ -1,38 +1,43 @@
 
 # AEW_Tracker
 
-The African Easterly Wave (AEW) Tracker is a program designed to identify and track AEWs in atmospheric data. AEWs are important meteorological phenomena that can lead to the formation of tropical cyclones and influence weather patterns over large regions, particularly in the Atlantic basin.
+This project contains a tracking algorithm for African Easterly Waves (AEWs) using atmospheric data from sources like ERA5. The main goal of this project is to analyze AEW tracks based on wind and vorticity data, with options to visualize and store the results.
+
 
 This repository is a fork from [github.com/mehtut/AEW_Tracker](https://github.com/mehtut/AEW_Tracker). All credits for the original project go to her.
 
-## Description
+## Project Structure
 
-The AEW Tracker algorithm consists of several components:
-
--   **AEW_Tracks.py**: This is the main program that executes the tracking algorithm. It takes input parameters such as the model type (WRF, CAM5, or ERA5), scenario type (Historical, late_century, Plus30), and the year to analyze. It parses these arguments from the command line and orchestrates the tracking process.
-    
--   **C_circle_functions.c**: This C program contains the circular smoothing algorithm used for data processing. It needs to be compiled into a shared library (`C_circle_functions.so`) before running the main program.
-    
--   **Pull_data.py**: This script handles the retrieval of data required for AEW tracking. It may need adjustments to the data locations depending on where the data is stored.
-
--   **Tracking_functions.py**: This file contains all the functions related to the identification and tracking algorithms of the AEW. It includes functions for smoothing, finding starting points, combining potential locations, filtering tracks, advecting tracks, and more.
+    AEW_Tracker/
+    │
+    ├── AEW_Tracks.py         # Main script for running the AEW tracking algorithm
+    ├── Tracking_functions.py # Functions for identifying and correcting AEW tracks
+    ├── Pull_data.py          # Functions for pulling data from ERA5 and other sources
+    ├── utilities.py          # Utility functions for file management and directories
+    ├── Data/                 # Folder for storing input data
+    ├── Figures/              # Folder for storing output figures
+    └── README.md             # Project overview and instructions
     
 
 ## Usage
 
-To run the AEW Tracker, use the following command format:
+1. Tracking AEWs: The main script AEW_Tracks.py runs the algorithm for tracking AEWs over a specified time period (May-October).
 
-`python AEW_Tracks.py --model 'WRF' --scenario 'late_century' --year '2010'` 
+2. Visualization: After tracking AEWs, the script generates visualizations showing the paths of AEWs on a map, using the plot_points_map function from AEW_Tracks.py.
 
-Make sure to adjust the model type, scenario type, and year according to your analysis needs.
+3. Data Fetching: The Pull_data.py script handles loading and formatting ERA5 or WRF data for analysis, converting them into a common format for the AEW tracker to process.
 
-Before running the tracker, compile the C program using the provided compilation command. Additionally, ensure that the data locations in `Pull_data.py` are correct before executing the main program.
+
+### Example:
+
+    python AEW_Tracks.py --model 'ERA5' --year '2020'
+
 
 ## Requirements
 
 The AEW Tracker requires the following dependencies, which can be installed using the provided `requirements.txt` file:
 
-`conda create --name aewtrack --file requirements.txt` 
+`conda create --name aewtrack --file requirements.txt`
 
 ## License
 
