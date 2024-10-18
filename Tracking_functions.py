@@ -7,7 +7,7 @@ from scipy.spatial import cKDTree
 from math import inf
 # from scipy import inf
 from collections.abc import Iterable
-from numba import jit
+from numba import jit, njit
 # %%
 '''
 Tracking_functions.py contains all of the tracking-related functions used by
@@ -57,21 +57,17 @@ def get_starting_targets(common_object, curve_vort_smooth, level=700):
     # get a list of indices (lat/lon index pairs) of local maxima in the
     # smoothed curvature vorticity field
     max_indices = peak_local_max(
-        curve_vort_smooth[
-            idx_level,
-            common_object.lat_index_south:common_object.lat_index_north+1,
-            common_object.lon_index_west:common_object.lon_index_east+1],
-        min_distance=1,
+        curve_vort_smooth[idx_level, :, :],
+        min_distance=5,
         threshold_abs=common_object.min_threshold
-    )  # indx come out ordered lat, lon
+    )
+    # index come out ordered lat, lon
 
     # get a list of weighted averaged lat/lon index pairs
-    # weighted_max_indices = get_mass_center(
-    #     common_object, curve_vort_smooth[idx_level, :, :], max_indices)
-
     # get specific attributes from the objet to pass to the functions
     attr_prop_obj = {i: getattr(common_object, i) for i in ['lat', 'lon',
                                                             'radius',
+                                                            'res',
                                                             'lat_index_south',
                                                             'lon_index_west']}
 
@@ -93,6 +89,78 @@ def get_starting_targets(common_object, curve_vort_smooth, level=700):
             weighted_max_indices, common_object.radius, 99999999)
     else:
         unique_max_locs = weighted_max_indices
+
+    return unique_max_locs
+
+
+def get_starting_targets_2(common_object, curve_vort_smooth, level=700):
+    """
+    Get the starting latitude and longitude values for AEW tracks.
+
+    Parameters:
+        common_object (object): The common object.
+        curve_vort_smooth (array): Smoothed curvature vorticity.
+        level (int, optional): The level at which to perform the
+            analysis (default is 700).
+
+    Returns:
+        list: A list of lat/lon pairs as tuples representing the locations
+        of unique vorticity maxima.
+    """
+    idx_level = np.where(common_object.level == level)[0][0]
+
+    # Calculate the search radius in pixels for peak detection
+    pixels = int((common_object.radius / (111*common_object.res))*0.7)
+
+    max_indices = peak_local_max(
+        curve_vort_smooth[idx_level, :, :],
+        min_distance=5,
+        threshold_abs=common_object.min_threshold)
+
+    lon = common_object.lon
+    lat = common_object.lat
+
+    # get differences between neighboring lat and lon points
+    dlon = lon[0, 1] - lon[0, 0]
+    dlat = lat[1, 0] - lat[0, 0]
+
+    unique_max_locs = []
+    delta = int((common_object.radius / (111*common_object.res))*0.6)
+    for max_index in max_indices:
+        # Extract the lat/lon indices of the peak location
+        max_lat_index, max_lon_index = max_index
+
+        # Compute the latitude and longitude values corresponding to the peak
+        max_lat = lat[max_lat_index, max_lon_index] + dlat / 2
+        max_lon = lon[max_lat_index, max_lon_index] + dlon / 2
+
+        # get new max lat and lon indices using the adjusted max_lat and
+        # max_lon valus above and adding or subtracting delta
+        # Calculate the current max lat and lon indices using absolute differences
+        max_lat_index = np.abs(lat[:, 0] - max_lat).argmin()
+        max_lon_index = np.abs(lon[0, :] - max_lon).argmin()
+
+        # Add and subtract the delta to/from the max indices to get a range
+        # around the max points
+        max_lat_index_plus_delta = max_lat_index + delta
+        max_lat_index_minus_delta = max_lat_index - delta
+        max_lon_index_plus_delta = max_lon_index + delta
+        max_lon_index_minus_delta = max_lon_index - delta
+
+        # create a cropped version of the variable array, lat and lon arrays
+        # using the delta modified lat/lon indices above
+        var_crop = curve_vort_smooth[
+            idx_level,
+            max_lat_index_minus_delta:max_lat_index_plus_delta,
+            max_lon_index_minus_delta:max_lon_index_plus_delta]
+
+        # if np.median(var_crop) > common_object.min_threshold:
+        # Append the location as a tuple
+        unique_max_locs.append((max_lat, max_lon))
+
+    # if len(unique_max_locs) > 1:
+    #     unique_max_locs = unique_locations(
+    #         unique_max_locs, common_object.radius, 99999999)
 
     return unique_max_locs
 
@@ -200,14 +268,15 @@ def get_mass_center(common_object, var, max_indices):
 
 @jit
 def get_mass_center_numba(var, max_indices,
-                          lat, lon, radius, lat_index_south,
+                          lat, lon, radius, res,
+                          lat_index_south,
                           lon_index_west
                           ):
     """
     Calculate the weighted average lat/lon indices of vorticity maxima.
 
     Parameters:
-        var (array): A variable (vorticity).
+        var (array): A variable (curvature vorticity).
         max_indices (list): A list of lat/lon indices of vorticity maxima.
         lat (array): Array of latitude values.
         lon (array): Array of longitude values.
@@ -219,22 +288,12 @@ def get_mass_center_numba(var, max_indices,
         list: A list of lat/lon values as tuples.
     """
     # # Get initial conditions from input arguments
-    # lat = dictionary.get('dlatatetime0', None)
-    # lon = dictionary.get('lon', None)
-    # radius = dictionary.get('radius', None)
-    # lat_index_south = dictionary.get('lat_index_south', None)
-    # lon_index_west = dictionary.get('lon_index_west', None)
-
     # set a minimum radius in km
     min_radius_km = 100.  # km
 
     # lists to store the weighted lats and lons
     weight_lat_list = []
     weight_lon_list = []
-
-    # get differences between neighboring lat and lon points
-    dlon = lon[0, 1] - lon[0, 0]
-    dlat = lat[1, 0] - lat[0, 0]
 
     # this is the approximate number of degrees covered by the common_object
     # radius + 4 to have a buffer ceil rounds up to the nearest int
@@ -246,28 +305,30 @@ def get_mass_center_numba(var, max_indices,
         # to get the max lat and lon indices, we need to add lat_index_south
         # and lon_index_west because the max indices were found using a dataset
         # that was cropped over the region of interest in get_starting_targets
-        max_lat_index = max_index[0] + \
-            lat_index_south  # this is an index
-        max_lon_index = max_index[1] + \
-            lon_index_west  # this is an index
+
+        # max_lat_index = max_index[0] + lat_index_south  # this is an index
+        # max_lon_index = max_index[1] + lon_index_west  # this is an index
+
+        max_lat_index = max_index[0]  # this is an index
+        max_lon_index = max_index[1]  # this is an index
 
         # get the max lat and lon values from the max lat and lon indices and
         # then add dlat/2 and dlon/2 to nudge the points
         # this is the actual latitude value
-        max_lat = lat[max_lat_index, max_lon_index] + (dlat/2.)
+        max_lat = lat[max_lat_index, max_lon_index] + (res/2.)
         # this is the actual longitude value
-        max_lon = lon[max_lat_index, max_lon_index] + (dlon/2.)
+        max_lon = lon[max_lat_index, max_lon_index] + (res/2.)
 
-        # get new max lat and lon indices using the adjusted max_lat and
-        # max_lon valus above and adding or subtracting delta
-        max_lat_index_plus_delta = (
-            np.abs(lat[:, 0] - (max_lat+delta))).argmin()
-        max_lat_index_minus_delta = (
-            np.abs(lat[:, 0] - (max_lat-delta))).argmin()
-        max_lon_index_plus_delta = (
-            np.abs(lon[0, :] - (max_lon+delta))).argmin()
-        max_lon_index_minus_delta = (
-            np.abs(lon[0, :] - (max_lon-delta))).argmin()
+        # Calculate the current max lat and lon indices using absolute differences
+        max_lat_index = np.abs(lat[:, 0] - max_lat).argmin()
+        max_lon_index = np.abs(lon[0, :] - max_lon).argmin()
+
+        # Add and subtract the delta to/from the max indices to get a range
+        # around the max points
+        max_lat_index_plus_delta = max_lat_index + delta
+        max_lat_index_minus_delta = max_lat_index - delta
+        max_lon_index_plus_delta = max_lon_index + delta
+        max_lon_index_minus_delta = max_lon_index - delta
 
         # create a cropped version of the variable array, lat and lon arrays
         # using the delta modified lat/lon indices above
@@ -387,7 +448,9 @@ def great_circle_dist_km(lon1, lat1, lon2, lat2):
     dlat = lat2_rad - lat1_rad
 
     # note that everything was already switched to radians a few lines above
-    a = np.sin(dlat/2.0)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2.0)**2
+    a = np.sin(dlat/2.0)**2 + np.cos(lat1_rad) * np.cos(lat2_rad) * \
+        np.sin(dlon/2.0)**2
+
     c = 2 * np.arcsin(np.sqrt(a))
     dist_km = 6371. * c  # 6371 is the radius of the Earth in km
 
@@ -421,6 +484,7 @@ def unique_locations(max_locations, radius, unique_loc_number):
     Returns:
         list: A list of lat/lon tuples of the unique locations.
     """
+
     # sort the list by the latitudes, so the lat/lon paris go from south to
     # north
     max_locations.sort(key=lambda x: x[0])
@@ -430,8 +494,11 @@ def unique_locations(max_locations, radius, unique_loc_number):
     # 111 km (at the equator).
     max_distance = radius/111.  # convert to degrees
 
-    # make a tree out of the lat/lon points in the list
+    # Make a KD-Trees out of the lat/lon points in the list
+    # KD-Trees are data structures that allow efficient spatial searches,
+    # making it easier to find nearby points.
     tree = cKDTree(max_locations)
+
     # make a list to hold the average of closely neighboring points
     point_neighbors_list_avg = []
     first_time = True
@@ -476,8 +543,8 @@ def unique_locations(max_locations, radius, unique_loc_number):
         # to each other average those points, keep them as a tuple
         # (so a new averaged lat/lon point), and append that to
         # point_neighbors_list_avg
-        point_neighbors_list_avg.append(
-            tuple(np.mean(point_neighbors, axis=0)))
+        point_neighbors_list_avg.append(tuple(np.mean(point_neighbors,
+                                                      axis=0)))
 
     # the number of unique locations is the length of the
     # point_neighbors_list_avg list use the list set option here to make sure
@@ -499,10 +566,17 @@ def unique_locations(max_locations, radius, unique_loc_number):
                                 new_unique_loc_number)
 
 
-def unique_track_locations(track_object, combined_unique_max_locs,
+def unique_track_locations(track_object, unique_max_locs,
                            current_time_index, radius):
     """
     Modify the existing track object to ensure unique track locations.
+
+    This function modifies the locations in a track object to ensure they are
+    unique by checking for nearby locations within a given radius and
+    averaging them if necessary. It updates the track object directly and
+    removes the averaged location from the list to avoid duplicates.
+    The function is essential in ensuring that the same location is not
+    represented multiple times in meteorological tracking data.
 
     This function takes a track object, the list of vorticity maximum lat/lon
     locations, the current time index, and the radius in km. The lat/lon
@@ -520,7 +594,7 @@ def unique_track_locations(track_object, combined_unique_max_locs,
 
     Parameters:
         track_object (object): The track object.
-        combined_unique_max_locs (list): The list of vorticity maximum lat/lon
+        unique_max_locs (list): The list of vorticity maximum lat/lon
             locations.
         current_time_index (int): The current time index.
         radius (float): The radius in km.
@@ -528,26 +602,24 @@ def unique_track_locations(track_object, combined_unique_max_locs,
     Returns:
         None
     """
-    # get the lat/lon pair for the track object at the current time using
-    # current_time_index
-    current_latlon_pair_list = []
-    for time_index in range(current_time_index,
-                            min(current_time_index+1,
-                                len(track_object.latlon_list))):
-        current_latlon_pair_list.append(track_object.latlon_list[time_index])
 
-    # loop through the lat/lon locations in the combined_unique_max_locs list
-    for latlon_loc in list(combined_unique_max_locs):
+    # Get the current lat/lon pair (track) for the AEW
+    current_latlon_pair_list = track_object.latlon_list[
+        current_time_index: min(current_time_index + 1,
+                                len(track_object.latlon_list))]
+
+    # loop through the lat/lon locations in the unique_max_locs list
+    for latlon_loc in list(unique_max_locs):
         for current_latlon_pair in current_latlon_pair_list:
             # get the distance between the track object's lat/lon and the
             # lat/lon pair from the list
             dist_km = great_circle_dist_km(
-                current_latlon_pair[1], current_latlon_pair[0], latlon_loc[1],
-                latlon_loc[0])
+                current_latlon_pair[1], current_latlon_pair[0],
+                latlon_loc[1], latlon_loc[0])
             # check and see if the distance is less than the radius. If it is,
             # replace the track_object lat/lon pair with the average of the
             # existing track_object lat/lon pair and the newly found lat/lon
-            # pair, remove the new pair from the combined_unique_max_locs list,
+            # pair, remove the new pair from the unique_max_locs list,
             # and continue to the next pair.
             if dist_km < radius:
                 track_object.latlon_list = [
@@ -555,99 +627,219 @@ def unique_track_locations(track_object, combined_unique_max_locs,
                      (latlon_loc[1] + current_latlon_pair[1])/2)
                     if x == current_latlon_pair else x for x in
                     track_object.latlon_list]
+
+                # track_object.latlon_list = [(latlon_loc[0],latlon_loc[1])
+                #     if x == current_latlon_pair else x for x in
+                #     track_object.latlon_list]
+
                 # remove the lat/lon pair from the list
-                combined_unique_max_locs.remove(latlon_loc)
+                unique_max_locs.remove(latlon_loc)
                 continue
     return
 
 
-def get_multi_positions(common_object, curve_vort_smooth, rel_vort_smooth,
-                        unique_max_locs):
-    """
-    Generate new unique maximum locations combining curvature and relative
-    vorticity data.
+def calculate_weighted_mean(near_max_locs, var_values, current_latlon_pair):
+    """Calculate weighted mean lat/lon, giving more weight to westward and
+    latitudinally close points."""
 
-    This function combines the existing points with a weighted average.
-    The new points are then run through unique_locations to check for
-    duplicates.
+    # Extract current latitude and longitude
+    current_lat, current_lon = current_latlon_pair
 
-    Parameters:
-        common_object (object): The common object containing region indices.
-        curve_vort_smooth (array): Smoothed curvature vorticity array.
-        rel_vort_smooth (array): Smoothed relative vorticity array.
-        unique_max_locs (list): List of unique maximum locations.
+    # Calculate latitudinal and longitudinal differences
+    lat_diff = np.abs(near_max_locs[:, 0] - current_lat)
+    # Positive if westward (smaller longitude)
+    lon_diff = current_lon - near_max_locs[:, 1]
 
-    Returns:
-        list: A new list of unique maximum locations.
-    """
-    # Create a variable list that contains the smoothed curvature vorticity
-    # and the relative vorticity
-    var_list = [curve_vort_smooth, rel_vort_smooth]
-    # Create a list for the new max lat/lon indices
-    new_weighted_max_indices_list = []
+    # Give more weight to points west of the current location (positive lon_diff)
+    # Increase weight by 1.5x if westward
+    lon_weight = np.where(lon_diff > 0, 1.8, 1.0)
 
-    # Loop through the two variables in var_list
-    for var_number in range(2):
-        # Loop through the pressure levels where
-        # 0 = 850 hPa, 1 = 700 hPa, and 2 = 600 hPa
-        for p_level in range(3):
-            # For var_number 0 (curvature vorticity), skip level 1 (700 hPa)
-            if var_number == 0 and p_level == 1:
-                continue
-            # For var_number 1 (relative vorticity), skip level 0 (850 hPa)
-            if var_number == 1 and p_level == 0:
-                continue
-            # Get the local maxima lat/lon indices over Africa and the
-            # Atlantic for the var in var_list.
-            new_max_indices = peak_local_max(
-                var_list[var_number][p_level,
-                                     common_object.lat_index_south:
-                                     common_object.lat_index_north+1,
-                                     common_object.lon_index_west:
-                                     common_object.lon_index_east+1
-                                     ], min_distance=1)
+    # Give more weight to points closer in latitude (smaller lat_diff)
+    # Prevent division by zero with a small epsilon
+    lat_weight = 1 / (lat_diff + 1e-6)
 
-            # Loop through all of the unique locations of local maxima from
-            # unique_max_locs
-            # Check to see if the lat/lon pairs in new_max_indices are within
-            # the radius of the unique locations
-            # Only keep the locations in new_max_indices that are within the
-            # radius of the location from unique_max_locs
-            for max_loc in unique_max_locs:
-                # get specific attributes from the objet to pass to
-                # the function
-                attr_prop_obj = {i: getattr(common_object, i)
-                                 for i in ['lat', 'lon',
-                                           'radius',
-                                           'lat_index_south',
-                                           'lon_index_west']}
+    # Final weights: combine variable values with lat and lon weights
+    combined_weights = np.abs((var_values) * lon_weight * lat_weight)
 
-                weighted_max_indices = is_maxima_numba(
-                    var_list[var_number][p_level, :, :],
-                    max_loc, new_max_indices, **attr_prop_obj)
-
-                # weighted_max_indices = is_maxima(
-                #     common_object, var_list[var_number][p_level, :, :],
-                #     max_loc, new_max_indices)
-
-                # Check to make sure there wasn't an empty list coming back
-                # from is_maxima
-                # if weighted_max_indices != 9999999:
-                if weighted_max_indices is not None:
-                    new_weighted_max_indices_list.append(weighted_max_indices)
-
-    # Flatten new_weighted_max_indices_list
-    flattened_indices = [
-        item for sublist in new_weighted_max_indices_list for item in sublist]
-
-    # Pass the flattened version of new_weighted_max_indices_list to
-    # unique_locations
-    if len(flattened_indices) > 1:
-        unique_max_locs = unique_locations(flattened_indices, 350., 99999999)
+    if np.sum(combined_weights) != 0:
+        # Weighted mean of lat/lon based on the combined weights
+        lat_pon = np.sum(
+            near_max_locs[:, 0] * combined_weights) / np.sum(combined_weights)
+        lon_pon = np.sum(
+            near_max_locs[:, 1] * combined_weights) / np.sum(combined_weights)
     else:
-        unique_max_locs = flattened_indices
+        # Default to the mean if combined weights sum to zero
+        lat_pon = np.mean(near_max_locs[:, 0])
+        lon_pon = np.mean(near_max_locs[:, 1])
 
-    return unique_max_locs
+    return lat_pon, lon_pon
+
+
+def unique_track_locations_2(common_object, track_object, unique_max_locs,
+                             current_time_index, var, level=700):
+    """Main function to update track locations based on nearby max values."""
+
+    idx_level = np.where(common_object.level == level)[0][0]
+    var = var[idx_level, :, :]
+
+    unique_max_locs_array = np.array(unique_max_locs)
+
+    # Get the current lat/lon pair (track) for the AEW
+    current_latlon_pair_list = track_object.latlon_list[
+        current_time_index: min(current_time_index + 1,
+                                len(track_object.latlon_list))]
+
+    for current_latlon_pair in current_latlon_pair_list:
+        # Calculate distances from the current lat/lon pair
+        # to each unique max location
+        dist_km = np.array([great_circle_dist_km(
+            current_latlon_pair[1], current_latlon_pair[0],
+            latlon_loc[1], latlon_loc[0])
+            for latlon_loc in unique_max_locs_array])
+
+        # Find the indices of locations within the specified radius
+        idx_distance = np.where(dist_km <= common_object.radius)[0]
+        unique_max_locs_copy = unique_max_locs_array.copy()
+
+        if len(idx_distance) > 0:
+            # Locations within the radius
+            near_max_locs = unique_max_locs_array[idx_distance]
+
+            # # Append the current lat/lon pair to the near_max_locs
+            # near_max_locs = np.vstack([near_max_locs, current_latlon_pair])
+            # dist_km  = np.hstack([dist_km[idx_distance], 1])
+
+            # Extract variable values at the corresponding grid points
+            # for near_max_locs
+            var_values = []
+            for latlon_loc in near_max_locs:
+                # Find the nearest indices in the lat/lon grids
+                lat_index = np.abs(
+                    common_object.lat[:, 0] - latlon_loc[0]).argmin()
+                lon_index = np.abs(
+                    common_object.lon[0, :] - latlon_loc[1]).argmin()
+                var_values.append(var[lat_index, lon_index])
+
+            var_values = np.abs(np.array(var_values))
+            # dist_km = dist_km[idx_distance]
+            # var_values = np.abs(np.array(var_values)/dist_km)
+            var_values *= 1.5
+
+            # Calculate weighted mean lat/lon with the modified weighting scheme
+            lat_pon, lon_pon = calculate_weighted_mean(
+                near_max_locs, var_values, current_latlon_pair)
+
+            # Ensure the updated lat/lon is reasonable by comparing
+            # with the current location
+            if lon_pon < current_latlon_pair[1]:
+                weight_new = 1
+                weight_current = 1
+                weight_sum = weight_new + weight_current
+                lat_pon = (lat_pon*weight_new
+                           + current_latlon_pair[0]*weight_current)/weight_sum
+                lon_pon = (lon_pon*weight_new
+                           + current_latlon_pair[1]*weight_current)/weight_sum
+            else:
+                lat_pon, lon_pon = current_latlon_pair
+
+            lat_index = np.abs(common_object.lat[:, 0] - lat_pon).argmin()
+            lon_index = np.abs(common_object.lon[0, :] - lon_pon).argmin()
+
+            lat_pon = common_object.lat[lat_index, 0]
+            lon_pon = common_object.lon[0, lon_index]
+
+            # Update the track with the new snapped lat/lon pair
+            track_object.latlon_list = [
+                (lat_pon, lon_pon)
+                if x == current_latlon_pair else x for x in
+                track_object.latlon_list
+            ]
+            for idx in idx_distance:
+                unique_max_locs.remove(tuple((unique_max_locs_copy[idx])))
+    return
+
+
+def unique_track_locations_3(common_object, track_object, unique_max_locs,
+                             current_time_index, var, level=700):
+    """Main function to update track locations based on nearby max values."""
+
+    idx_level = np.where(common_object.level == level)[0][0]
+    var = var[idx_level, :, :]
+
+    unique_max_locs_array = np.array(unique_max_locs)
+
+    # Get the current lat/lon pair (track) for the AEW
+    current_latlon_pair_list = track_object.latlon_list[
+        current_time_index: min(current_time_index + 1,
+                                len(track_object.latlon_list))]
+
+    for current_latlon_pair in current_latlon_pair_list:
+        # Calculate distances from the current lat/lon pair
+        # to each unique max location
+        dist_km = np.array([great_circle_dist_km(
+            current_latlon_pair[1], current_latlon_pair[0],
+            latlon_loc[1], latlon_loc[0])
+            for latlon_loc in unique_max_locs_array])
+
+        # Find the indices of locations within the specified radius
+        idx_distance = np.where(dist_km <= common_object.radius)[0]
+        unique_max_locs_copy = unique_max_locs_array.copy()
+
+        if len(idx_distance) > 0:
+            # Locations within the radius
+            near_max_locs = unique_max_locs_array[idx_distance]
+
+            # # Append the current lat/lon pair to the near_max_locs
+            # near_max_locs = np.vstack([near_max_locs, current_latlon_pair])
+
+            # Extract variable values at the corresponding grid points
+            # for near_max_locs
+            var_values = []
+            for latlon_loc in near_max_locs:
+                # Find the nearest indices in the lat/lon grids
+                lat_index = np.abs(
+                    common_object.lat[:, 0] - latlon_loc[0]).argmin()
+                lon_index = np.abs(
+                    common_object.lon[0, :] - latlon_loc[1]).argmin()
+                var_values.append(var[lat_index, lon_index])
+
+            var_values = np.abs(np.array(var_values))
+            # dist_km = dist_km[idx_distance]
+            # var_values = np.abs(np.array(var_values)/dist_km)
+            # var_values *= 1.5
+
+            # Calculate weighted mean lat/lon with the modified weighting scheme
+            lat_pon, lon_pon = calculate_weighted_mean(
+                near_max_locs, var_values, current_latlon_pair)
+
+            # Ensure the updated lat/lon is reasonable by comparing
+            # with the current location
+            if lon_pon < current_latlon_pair[1]:
+                weight_new = 1.2
+                weight_current = 1
+                weight_sum = weight_new + weight_current
+                lat_pon = (lat_pon*weight_new
+                           + current_latlon_pair[0]*weight_current)/weight_sum
+                lon_pon = (lon_pon*weight_new
+                           + current_latlon_pair[1]*weight_current)/weight_sum
+            else:
+                lat_pon, lon_pon = current_latlon_pair
+
+            lat_index = np.abs(common_object.lat[:, 0] - lat_pon).argmin()
+            lon_index = np.abs(common_object.lon[0, :] - lon_pon).argmin()
+
+            lat_pon = common_object.lat[lat_index, 0]
+            lon_pon = common_object.lon[0, lon_index]
+
+            # Update the track with the new snapped lat/lon pair
+            track_object.latlon_list = [
+                (lat_pon, lon_pon)
+                if x == current_latlon_pair else x for x in
+                track_object.latlon_list
+            ]
+            for idx in idx_distance:
+                unique_max_locs.remove(tuple((unique_max_locs_copy[idx])))
+    return
 
 
 def is_maxima(common_object, var, max_loc, new_max_indices):
@@ -702,7 +894,7 @@ def is_maxima(common_object, var, max_loc, new_max_indices):
     # If max_indices_near_max_loc is empty, that append step is skipped.
     if max_indices_near_max_loc:
         attr_prop_obj = {i: getattr(common_object, i) for i in [
-            'lat', 'lon', 'radius', 'lat_index_south', 'lon_index_west']}
+            'lat', 'lon', 'radius', 'res', 'lat_index_south', 'lon_index_west']}
 
         weighted_max_indices = get_mass_center_numba(
             var, max_indices_near_max_loc, **attr_prop_obj)
@@ -716,7 +908,7 @@ def is_maxima(common_object, var, max_loc, new_max_indices):
 
 @jit
 def is_maxima_numba(var, max_loc, new_max_indices,
-                    lat, lon, radius, lat_index_south, lon_index_west):
+                    lat, lon, radius, res, lat_index_south, lon_index_west):
     """
     Find the weighted maxima indices close to an existing max_loc location.
 
@@ -747,12 +939,17 @@ def is_maxima_numba(var, max_loc, new_max_indices,
         # max_index[0] and max_index[1], respectively, because the max_indices
         # were calculated over a cropped region so the indices will not match
         # the full lat/lon arrays.
-        dist_km = great_circle_dist_km(
-            lon[max_index[0]+lat_index_south,
-                max_index[1]+lon_index_west],
-            lat[max_index[0]+lat_index_south,
-                max_index[1]+lon_index_west],
-            max_loc[1], max_loc[0])
+        # dist_km = great_circle_dist_km(
+        #     lon[max_index[0]+lat_index_south,
+        #         max_index[1]+lon_index_west],
+        #     lat[max_index[0]+lat_index_south,
+        #         max_index[1]+lon_index_west],
+        #     max_loc[1], max_loc[0])
+
+        dist_km = great_circle_dist_km(lon[max_index[0], max_index[1]],
+                                       lat[max_index[0], max_index[1]],
+                                       max_loc[1], max_loc[0])
+
         # if the distance is less than the common_object radius, then append
         # that max index to max_indices_near_max_loc
         if dist_km < radius:
@@ -772,19 +969,18 @@ def is_maxima_numba(var, max_loc, new_max_indices,
     if max_indices_near_max_loc:
         weighted_max_indices = get_mass_center_numba(
             var, max_indices_near_max_loc,
-            lat, lon, radius, lat_index_south,
+            lat, lon, radius, res, lat_index_south,
             lon_index_west)
         # weighted_max_indices = get_mass_center(
         #     common_object, var, max_indices_near_max_loc)
     else:
-        # weighted_max_indices = 9999999
+        # weighted_max_indices = 9999999.
         weighted_max_indices = None
 
     return weighted_max_indices
 
 
-def assign_magnitude(common_object, curve_vort_smooth, rel_vort_smooth,
-                     track_object):
+def assign_magnitude(common_object, curve_vort_smooth, track_object):
     """
     Assign a vorticity magnitude value to an AEW track object.
 
@@ -811,15 +1007,8 @@ def assign_magnitude(common_object, curve_vort_smooth, rel_vort_smooth,
         lon_index = (
             np.abs(common_object.lon[0, :] - lat_lon_pair[1])).argmin()
 
-        # the magnitude is whatever is largest, curvature or relative voriticy
-        # at 850., 700., 600. or 700., 600., respectively
-        magnitude = max(curve_vort_smooth[0, lat_index, lon_index],
-                        curve_vort_smooth[1, lat_index, lon_index],
-                        curve_vort_smooth[2, lat_index, lon_index],
-                        rel_vort_smooth[1, lat_index, lon_index],
-                        rel_vort_smooth[2, lat_index, lon_index])
         # add the magnitude to the track object
-        track_object.add_magnitude(magnitude)
+        track_object.add_magnitude(curve_vort_smooth[1, lat_index, lon_index])
         return
     else:
         return
@@ -830,9 +1019,9 @@ def filter_tracks(common_object, track_object):
     Filter out AEW tracks that don't meet specific criteria.
 
     This function catches and filters out any tracks that don't make sense
-    for actual AEW tracks (e.g., moving east instead of west). 
+    for actual AEW tracks (e.g., moving east instead of west).
     It evaluates various conditions based on the common_object and the
-    track_object and returns a filter_result_object indicating 
+    track_object and returns a filter_result_object indicating
     whether the track should be filtered out.
 
     Parameters:
@@ -850,26 +1039,51 @@ def filter_tracks(common_object, track_object):
     filter_result_object = filter_result()
 
     # Get rid of any tracks that are going east instead of west
-    if len(track_object.latlon_list) > 4 and \
-        (track_object.latlon_list[-2][1]
-         - track_object.latlon_list[-1][1] < 0) and \
-        (track_object.latlon_list[-3][1]
-         - track_object.latlon_list[-2][1] < 0) and \
-        (track_object.latlon_list[-4][1]
-         - track_object.latlon_list[-3][1] < 0) and \
-        (track_object.latlon_list[-5][1]
-         - track_object.latlon_list[-4][1] < 0):
-        filter_result_object.reject_track_direction = True
+    if len(track_object.latlon_list) > 4:
+        longitudes = [point[1] for point in track_object.latlon_list[-5:]]
+
+        # Check if all consecutive longitude differences are positive
+        # (indicating eastward movement)
+        if all(longitudes[i] < longitudes[i + 1]
+               for i in range(len(longitudes) - 1)):
+            filter_result_object.reject_track_direction = True
+        else:
+            filter_result_object.reject_track_direction = False
     else:
         filter_result_object.reject_track_direction = False
 
-    # If the track lasts more than 6 times and the intensities are too weak
-    # (less than min_threshold) for more than three times, then return True
-    # and the track object is removed and added to a finished track list
-    if len(track_object.latlon_list) > 6 and \
-            sum(1 for x in track_object.magnitude_list
-                if x < common_object.min_threshold) > 3:
-        filter_result_object.magnitude_finish_track = True
+    # # Get rid of any tracks that are going east instead of west
+    # if len(track_object.latlon_list) > 4 and \
+    #     (track_object.latlon_list[-2][1]
+    #      - track_object.latlon_list[-1][1] < 0) and \
+    #     (track_object.latlon_list[-3][1]
+    #      - track_object.latlon_list[-2][1] < 0) and \
+    #     (track_object.latlon_list[-4][1]
+    #      - track_object.latlon_list[-3][1] < 0) and \
+    #     (track_object.latlon_list[-5][1]
+    #      - track_object.latlon_list[-4][1] < 0):
+    #     filter_result_object.reject_track_direction = True
+    # else:
+    #     filter_result_object.reject_track_direction = False
+
+    if len(track_object.latlon_list) > 4:
+        magnitudes = np.array(track_object.magnitude_list)
+        negative_count = np.sum(magnitudes < 0)
+
+        # Check if more than 25% of the magnitudes are negative
+        if negative_count > 0.25 * len(magnitudes):
+            filter_result_object.magnitude_finish_track = True
+        else:
+            filter_result_object.magnitude_finish_track = False
+    else:
+        filter_result_object.magnitude_finish_track = False
+
+    # Check if more than 3 points in a track longer than 6 points are
+    # below the intensity threshold. Also ensure that magnitudes are positive
+    if len(track_object.latlon_list) > 6:
+        weak_points = sum(1 for magnitude in track_object.magnitude_list
+                          if magnitude < common_object.min_threshold)
+        filter_result_object.magnitude_finish_track = weak_points > 4
     else:
         filter_result_object.magnitude_finish_track = False
 
@@ -883,6 +1097,111 @@ def filter_tracks(common_object, track_object):
 
     return filter_result_object
 
+
+def filter_tracks_2(common_object, track_object, AEW_tracks_list):
+    """
+    Filter out AEW tracks that don't meet specific criteria.
+
+    This function catches and filters out any tracks that don't make sense
+    for actual AEW tracks (e.g., moving east instead of west).
+    It evaluates various conditions based on the common_object, the track_object,
+    and the AEW_tracks_list, and returns a filter_result_object indicating
+    whether the track should be filtered out.
+
+    Parameters:
+        common_object (object): The common object containing region indices
+            and thresholds.
+        track_object (object): The track object to be filtered.
+        AEW_tracks_list (list): List of existing AEW tracks for comparison.
+
+    Returns:
+        filter_result_object (object): An object containing filtering results
+            indicating whether the track should be rejected based on various
+            criteria.
+    """
+    # Create an instance of filter_result to keep track of whether or not a
+    # given track_object needs to be filtered out
+    filter_result_object = filter_result()
+
+    # 1. Get rid of any tracks that are going east instead of west
+    if len(track_object.latlon_list) > 4:
+        longitudes = [point[1] for point in track_object.latlon_list[-5:]]
+
+        # Check if all consecutive longitude differences are positive
+        # (indicating eastward movement)
+        if all(longitudes[i] < longitudes[i + 1] for i in range(len(longitudes) - 1)):
+            filter_result_object.reject_track_direction = True
+        else:
+            filter_result_object.reject_track_direction = False
+    else:
+        filter_result_object.reject_track_direction = False
+
+    # 2. Filter based on the magnitude of vorticity
+    if len(track_object.latlon_list) > 4:
+        magnitudes = np.array(track_object.magnitude_list)
+        negative_count = np.sum(magnitudes < 0)
+
+        # Check if more than 25% of the magnitudes are negative
+        if negative_count > 0.25 * len(magnitudes):
+            filter_result_object.magnitude_finish_track = True
+        else:
+            filter_result_object.magnitude_finish_track = False
+    else:
+        filter_result_object.magnitude_finish_track = False
+
+    # 3. Check for weak points in tracks longer than 6 points
+    if len(track_object.latlon_list) > 6:
+        weak_points = sum(1 for magnitude in track_object.magnitude_list
+                          if magnitude < common_object.min_threshold)
+        filter_result_object.magnitude_finish_track = weak_points > 4
+    else:
+        filter_result_object.magnitude_finish_track = False
+
+    # 4. Filter based on latitude limits (remove tracks going too far north or south)
+    last_latitude = track_object.latlon_list[-1][0]
+    if last_latitude > 40. or last_latitude < -5.:
+        filter_result_object.latitude_finish_track = True
+    else:
+        filter_result_object.latitude_finish_track = False
+
+    # 5. Filter AEW tracks based on proximity to other AEW tracks' last points
+    # Get the last lat/lon of the current track
+    last_lat, last_lon = track_object.latlon_list[-1]
+    
+    # Initialize distances with a high value
+    dist_km = np.full(len(AEW_tracks_list), 9999.0)
+    
+    for i, other_track in enumerate(AEW_tracks_list):
+        # Skip comparing the track with itself
+        if other_track.id == track_object.id:
+            continue
+        try:
+            # # Get the index for the current date and compare proximity
+            # current_time_index = other_track.time_list.index(date_i)
+            # other_last_lat, other_last_lon = track_object.latlon_list[
+            #     current_time_index]
+            # Compare the last position of the current track to the
+            # other track's last position
+            other_last_lat, other_last_lon = other_track.latlon_list[-1]
+
+            dist_km[i] = great_circle_dist_km(
+                last_lat, last_lon, other_last_lat, other_last_lon)
+        except (IndexError, ValueError):
+            # Handle cases where the time index is not present
+            # or lat/lon is unavailable
+            continue
+        
+    # Reject if any other AEW track's last point is within the specified radius
+    if np.any(dist_km <= common_object.radius):
+        # print(track_object.id)
+        # print(dist_km)
+        filter_result_object.reject_due_to_proximity = True
+    else:
+        filter_result_object.reject_due_to_proximity = False
+
+    return filter_result_object
+    
+    
 
 def circle_avg_m_point(common_object, var, lat_lon_pair):
     """
@@ -1023,7 +1342,8 @@ def circle_avg_m_point_numba(var, lat_lon_pair,
     # multiply the radius (in km) by the total number of longitude
     # gridpoints = var.shape[2] for the whole domain divided by the degrees
     # of longitude in the domain divided by 360 times the circumference of
-    # the Earth = 2piR. The degrees of longitude/360 * circumference is to
+    # the Earth = 2piR.
+    # The degrees of longitude/360 * circumference is to
     # scale the circumference to account for non-global data. This is also a
     # rough approximation since we're not quite at the equator.
     #
@@ -1103,6 +1423,83 @@ def circle_avg_m_point_numba(var, lat_lon_pair,
     return smoothed_var
 
 
+@njit
+def circle_avg_m_point_numba_optimized(var, lat_lon_pair, lat, lon,
+                                       radius, total_lon_degrees):
+    """
+    Optimized calculation of circle average at a specific lat/lon
+    point using Numba.
+
+    This function calculates the smoothed variable centered at a specific
+    lat/lon point, using a radius defined in kilometers and converts it to
+    grid points for smoother computation.
+
+    Parameters:
+        var (numpy.ndarray): Variable to be smoothed (e.g., u or v component).
+        lat_lon_pair (tuple): The latitude and longitude pair of interest.
+        lat (numpy.ndarray): Latitude array.
+        lon (numpy.ndarray): Longitude array.
+        radius (float): Radius in kilometers for the smoothing.
+        total_lon_degrees (float): The total degrees of longitude in the domain.
+
+    Returns:
+        smoothed_var (numpy.ndarray): Circle-averaged variable centered
+                    at the lat/lon point.
+    """
+    cos_lat = np.cos(np.radians(lat))
+    R = 6371.0  # Earth radius in km
+
+    # Convert radius from km to grid points
+    radius_gridpts = \
+        int(radius * (lat.shape[1] /
+            ((total_lon_degrees / 360) * 2 * np.pi * R)))
+
+    # Create a copy of the variable to store smoothed values
+    smoothed_var = np.copy(var)
+
+    # Find the closest grid point for the specified lat/lon pair
+    lat_index_maxima = np.abs(lat[:, 0] - lat_lon_pair[0]).argmin()
+    lon_index_maxima = np.abs(lon[0, :] - lat_lon_pair[1]).argmin()
+
+    tempv = 0.0
+    divider = 0.0
+
+    # Loop through the circle's radius to compute the average
+    for radius_index in range(-radius_gridpts, radius_gridpts + 1):
+        lat_index = lat_index_maxima + radius_index
+        if lat_index < 0 or lat_index >= lat.shape[0]:
+            continue  # Skip if out of bounds
+
+        lat1 = lat[lat_index_maxima, lon_index_maxima]
+        lat2 = lat[lat_index, lon_index_maxima]
+
+        # Compute distance in radians using the haversine formula
+        cos_lat1, cos_lat2 = np.cos(np.radians(lat1)), np.cos(np.radians(lat2))
+        sin_lat1, sin_lat2 = np.sin(np.radians(lat1)), np.sin(np.radians(lat2))
+
+        # Calculate angle in radians between lat1 and lat2
+        angle_rad = np.arccos(sin_lat1 * sin_lat2 +
+                              cos_lat1 * cos_lat2 * np.cos(radius / R))
+
+        # Convert the angle from radians to grid points
+        lon_gridpts = int((angle_rad / 0.0174533) * (lat.shape[1] / 360.))
+
+        for lon_circle_index in range(lon_index_maxima - lon_gridpts,
+                                      lon_index_maxima + lon_gridpts + 1):
+            cyclic_lon_index = lon_circle_index % lat.shape[1]
+            # Handle cyclic longitude indices
+
+            # Accumulate weighted variable value
+            tempv += cos_lat[lat_index, lon_index_maxima] * \
+                var[lat_index, cyclic_lon_index]
+            divider += cos_lat[lat_index, lon_index_maxima]
+
+    # Assign the average value to the central point
+    if divider != 0:
+        smoothed_var[lat_index_maxima, lon_index_maxima] = tempv / divider
+    return smoothed_var
+
+
 def advect_tracks(common_object, u_3d, v_3d, track_object, times, time_index):
     """
     Advects a track object's last lat/lon point using the average of the
@@ -1147,10 +1544,20 @@ def advect_tracks(common_object, u_3d, v_3d, track_object, times, time_index):
                                'total_lon_degrees',
                                ]}
 
-    u_2d_smooth = circle_avg_m_point_numba(u_2d, lat_lon_pair,
-                                           **attr_prop_obj)
-    v_2d_smooth = circle_avg_m_point_numba(v_2d, lat_lon_pair,
-                                           **attr_prop_obj)
+    try:
+
+        u_2d_smooth = circle_avg_m_point_numba_optimized(u_2d, lat_lon_pair,
+                                                         **attr_prop_obj)
+        v_2d_smooth = circle_avg_m_point_numba_optimized(v_2d, lat_lon_pair,
+                                                         **attr_prop_obj)
+
+    except:
+        print(lat_lon_pair)
+        a
+    # u_2d_smooth = circle_avg_m_point_numba(u_2d, lat_lon_pair,
+        #                                    **attr_prop_obj)
+    # v_2d_smooth = circle_avg_m_point_numba(v_2d, lat_lon_pair,
+    #                                        **attr_prop_obj)
 
     # u_2d_smooth = circle_avg_m_point(common_object, u_2d, lat_lon_pair)
     # v_2d_smooth = circle_avg_m_point(common_object, v_2d, lat_lon_pair)
@@ -1175,9 +1582,26 @@ def advect_tracks(common_object, u_3d, v_3d, track_object, times, time_index):
     # checking to see if time_index+1 (the next time)
     # is less than times.shape[0], otherwise there wil be an index error
     if time_index + 1 < times.shape[0]:
-        # add the new lat/lon pair to the end of the track_object's latlon_list
-        track_object.add_latlon((new_lat_value, new_lon_value))
         # add the next time to the end of the track_objects time list
         track_object.add_time(times[time_index + 1])
 
+        # In the case that the code if generating NaNs
+        if np.any(np.isnan([new_lat_value, new_lon_value]))\
+                or np.any(np.isinf([new_lat_value, new_lon_value])):
+            return
+        if not is_in_data(new_lat_value, new_lon_value,
+                          common_object.lat_min,
+                          common_object.lat_max,
+                          common_object.lon_min,
+                          common_object.lon_max):
+            return
+
+        # add the new lat/lon pair to the end of the track_object's latlon_list
+        track_object.add_latlon((new_lat_value, new_lon_value))
+
     return
+
+
+@jit
+def is_in_data(lat_i, lon_i, lat_min, lat_max, lon_min, lon_max):
+    return (lat_min <= lat_i <= lat_max) and (lon_min <= lon_i <= lon_max)
