@@ -1,6 +1,8 @@
 # Ignore the data and figures generated
 Data/*
+data_exp/*
 Figures/*
+experiments/*
 
 # C_circle_functions.so compilation
 C_circle_functions.so
