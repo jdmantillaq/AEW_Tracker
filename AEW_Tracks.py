@@ -34,6 +34,7 @@ visualizing all tracks found over the specified time period.
 Usage:
     To run the program, use the following command:
     python AEW_Tracks.py --model 'ERA5' --year '2010'
+    python AEW_Tracks.py --year '2010'
 
 Command Line Arguments:
     --model str       : The model type to be used for tracking (e.g., 'ERA5').
@@ -58,6 +59,7 @@ class Common_track_data:
     """
     Class containing common information used for tracking.
     """
+
     def __init__(self, model=None, lat=None, lon=None, dt=None,
                  min_threshold=None, radius=None):
         self.model = model
@@ -78,6 +80,18 @@ class Common_track_data:
 
     def add_model(self, model_type):
         self.model = model_type
+
+    def __repr__(self):
+        lat = self.lat[:, 0]
+        lon = self.lon[0, :]
+        text = f'Model: {self.model}\n'\
+            f'Minimum threshold (CV): {self.min_threshold}\n'\
+            f'Radius [km]: {self.radius}\n'\
+            f'dt [hours]: {self.dt}\n'\
+            f'Spatial resolution: {self.res}°\n'\
+            f'lat [dim: {self.lat.shape}]: {lat.min()} to {lat.max()}\n'\
+            f'lon [dim: {self.lon.shape}]: {lon.min()} to {lon.max()}'
+        return text
 
 
 class AEW_track:
@@ -127,7 +141,7 @@ class AEW_track:
 
 def plot_points_map(aew_track_list, lat_step=15, lon_step=30,
                     map_resolution=50, point_size_start=15, point_size_end=40,
-                    cmap='viridis'):
+                    cmap='viridis', title=None):
     """
     Generate a figure with connected latitude/longitude points overlaid on a
     map to visualize AEW tracks. The point sizes increase linearly for each track.
@@ -153,6 +167,9 @@ def plot_points_map(aew_track_list, lat_step=15, lon_step=30,
     # Plot information
     fig = plt.figure(figsize=(8, 2))
     ax = fig.add_axes([0, 0, 1, 1], projection=ccrs.PlateCarree())
+    
+    if title is not None:
+        plt.title(title, loc='left')
 
     # Create color palette
     colors = sns.color_palette(cmap, len(aew_track_list))
@@ -211,7 +228,7 @@ def plot_points_map(aew_track_list, lat_step=15, lon_step=30,
 
 def plot_potential_loc_map(var_values, common_object, value_limit,
                            treshold, points=None, aew_list=None,
-                           label=None, level=700,
+                           label=None,
                            lat_step=15, lon_step=30,
                            map_resolution=50,
                            cmap='RdBu_r', title=None):
@@ -238,7 +255,6 @@ def plot_potential_loc_map(var_values, common_object, value_limit,
     import cartopy.crs as ccrs
     from matplotlib.patches import Circle
 
-    idx_level = np.where(common_object.level == level)[0][0]
     lat = common_object.lat
     lon = common_object.lon
 
@@ -253,14 +269,10 @@ def plot_potential_loc_map(var_values, common_object, value_limit,
     cmap = sns.color_palette(cmap, as_cmap=True)
 
     # # Plot the temperature data for the current time slice
-    cs = ax.contourf(lon, lat, var_values[idx_level, :, :], levels,
+    cs = ax.contourf(lon, lat, var_values[:, :], levels,
                      cmap=cmap, extend='both', transform=ccrs.PlateCarree())
-    # cs = ax.pcolormesh(lon, lat, var_values[idx_level, :, :],
-    #                    cmap=cmap, vmin=levels.min(),
-    #                    vmax=levels.max(),
-    #                    transform=ccrs.PlateCarree())
 
-    ax.contour(lon, lat, var_values[idx_level, :, :], [treshold],
+    ax.contour(lon, lat, var_values[:, :], [treshold],
                linewidths=0.5, colors='black', transform=ccrs.PlateCarree())
 
     if points is not None:
@@ -351,7 +363,7 @@ def load_or_fetch_data(path_data_exp, file_exp_name, common_object,
         smooth_field: Boolean indicating whether to smooth the field data.
 
     Returns:
-        u_3d, v_3d, rel_vort_3d, curve_vort_3d: Loaded or fetched data variables.
+        u_2d, v_2d, rel_vort_3d, curve_vort_3d: Loaded or fetched data variables.
     """
 
     file_path = f'{path_data_exp}{file_exp_name}'
@@ -360,25 +372,90 @@ def load_or_fetch_data(path_data_exp, file_exp_name, common_object,
         # Load data from file
         try:
             with open(file_path, 'rb') as file:
-                u_3d, v_3d, rel_vort_3d, curve_vort_3d = pickle.load(file)
+                u_2d, v_2d, rel_vort_3d, curve_vort_3d = pickle.load(file)
         except (pickle.UnpicklingError, FileNotFoundError, OSError) as e:
             print(f"Error loading data from file: {e}")
             # Handle the error appropriately, e.g., fetch data or return default values
 
     else:
         # Fetch data and save to file
-        u_3d, v_3d, rel_vort_3d, curve_vort_3d = pull.get_variables_par(
+        u_2d, v_2d, rel_vort_3d, curve_vort_3d = pull.get_variables_par(
             common_object, times[time_index], smooth_field=smooth_field
         )
 
         try:
             with open(file_path, 'wb') as file:
-                pickle.dump([u_3d, v_3d, rel_vort_3d, curve_vort_3d], file)
+                pickle.dump([u_2d, v_2d, rel_vort_3d, curve_vort_3d], file)
         except (pickle.PicklingError, OSError) as e:
             print(f"Error saving data to file: {e}")
             # Handle the error appropriately
 
-    return u_3d, v_3d, rel_vort_3d, curve_vort_3d
+    return u_2d, v_2d, rel_vort_3d, curve_vort_3d
+
+
+def process_clean_tracks(path_data_exp, path_fig_out, times, finished_AEW_tracks_list,
+                         common_object, min_threshold, save_fig=True, smooth_field=True):
+    """
+    Function to process and plot AEW tracks over a range of time steps.
+
+    Parameters:
+        path_data_exp (str): Path to the experimental data.
+        path_fig_out (str): Path to save output figures.
+        times (list): List of time points.
+        finished_AEW_tracks_list (list): List of finished AEW tracks.
+        common_object (object): Object containing common track data.
+        min_threshold (float): Threshold value for identifying AEWs.
+        save_fig (bool): Whether to save the figures (default: True).
+        smooth_field (bool): Whether to smooth the data fields (default: True).
+
+    Returns:
+        None
+    """
+    path_exp_clean_tracks = f'{path_fig_out}clean_tracks/'
+    util.create_path(path_exp_clean_tracks)
+
+    for time_index, time_i in tqdm(enumerate(times), desc="Processing dates clean AEW",
+                                   total=len(times), leave=True):
+
+        date_ii = time_i.strftime('%Y-%m-%d %H:%M:%S')
+        print(f"{'-'*66}")
+        print(f"{date_ii:^66}")
+        print(f"{'-'*66}")
+
+        # Load data for the current time step
+        file_exp_name = f"{time_i.strftime('%Y-%m-%d_%H:%M:%S')}.obj"
+        u_2d, v_2d, rel_vort_3d, curve_vort_3d = load_or_fetch_data(
+            path_data_exp, file_exp_name, common_object, times,
+            time_index, smooth_field)
+
+        active_aew_list = []
+        for track_object in finished_AEW_tracks_list:
+            try:
+                current_time_index = track_object.time_list.index(
+                    times[time_index])
+                # Create a new AEW_track object for the cut track
+                new_aew_track = AEW_track()
+
+                # Copy latitude/longitude, magnitude, and time data up to current time index
+                new_aew_track.latlon_list = track_object.latlon_list[:current_time_index + 1]
+                new_aew_track.magnitude_list = track_object.magnitude_list[:current_time_index + 1]
+                new_aew_track.time_list = track_object.time_list[:current_time_index + 1]
+
+                # Append the new "cut" AEW track to the active list
+                active_aew_list.append(new_aew_track)
+
+            except ValueError:
+                continue
+
+        # Plot and save the results for the current time step
+        fig = plot_potential_loc_map(curve_vort_3d, common_object, aew_list=active_aew_list,
+                                     treshold=min_threshold, value_limit=0.000_02,
+                                     label='Curvature Vorticity', title=date_ii)
+
+        if save_fig:
+            fig.savefig(f'{path_exp_clean_tracks}{time_index:04}.png',
+                        dpi=200, bbox_inches='tight', transparent=False, facecolor='white')
+            plt.close('all')
 
 
 def save_aew_tracks(path_data_out, file_name, AEW_tracks_list):
@@ -425,26 +502,41 @@ def print_dates(start_date, end_date):
 
 
 if __name__ == '__main__':
-    model = 'ERA5'
-    year = 1991
 
-     # Define the output path for experiment results (AEW tracks)
-    path_data_out = 'experiments/'
+    parser = argparse.ArgumentParser(description='AEW Tracker.')
+    parser.add_argument('--year', dest='year',
+                        help='Get the year of interest', required=True)
+    args = parser.parse_args()
+
+    # set the year that is parsed from the command line
+    year = int(args.year)
+    
+    # year = 1996    
+    model = 'ERA5'
+    
+
+    # Define the output path for experiment results (AEW tracks)
+    path_data_out = os.path.join(os.path.dirname(__file__), 'experiments/')
 
     # Flags to control whether figures should be plotted and saved
-    plot_fig = True
-    save_fig = True
+    plot_fig = False
+    save_fig = False
 
     # Experiment flag (indicates this is an experimental run)
-    experiment = True
-    
+    experiment = False
+
     # Define paths for experiment-specific data and output figures
-    path_data_exp = '/home/cambio_climatico/AEW_Tracker/data_exp/'
-    path_fig_out = '/home/cambio_climatico/AEW_Tracker/Figures/Exp7/'
+    path_data_exp = os.path.join(os.path.dirname(__file__), 'data_exp/')
+    
+    if experiment:
+        path_fig = os.path.join(os.path.dirname(__file__), 'Fig_exp/')
+        util.create_path(path_fig)
+        
+        path_fig = os.path.join(path_fig, 'Exp1/')
+        util.create_path(path_fig)
+        
 
-    util.create_path(path_fig_out)
-
-    # Set the radius (in kilometers) used for smoothing fields and 
+    # Set the radius (in kilometers) used for smoothing fields and
     # identifying points that belong to the same AEW track
     radius_km = 600  # km
 
@@ -471,20 +563,16 @@ if __name__ == '__main__':
     pull.get_common_track_data(common_object)
 
     # Set the start and end dates for tracking AEWs (from May to November)
-    start_date = pd.Timestamp(year, 6, 1)
-    end_date = pd.Timestamp(year, 8, 1)
+    start_date = pd.Timestamp(year, 5, 1)
+    end_date = pd.Timestamp(year, 11, 1)
 
     # Print the start and end dates for the tracking period
     print_dates(start_date, end_date)
-    
+
     # Generate the list of timestamps for the tracking period with a frequency
     # based on the time step defined in common_object (e.g., every 6 hours)
     times = pd.date_range(start=start_date, end=end_date,
                           freq=f'{common_object.dt}h')
-
-    # Create a string to represent the experimental setup
-    # (e.g., 600km smoothing, longitude limit)
-    exp = f'{int(radius_km)}km_lon:{limit_long_init}'
 
     # Initialize lists to hold the AEW tracks for the current time step
     # and finished AEW tracks that have been fully processed
@@ -503,26 +591,32 @@ if __name__ == '__main__':
         # Fetch variables for the current time step from experimentdata or directly
         if experiment:
             file_exp_name = f"{time_i.strftime('%Y-%m-%d_%H:%M:%S')}.obj"
-            u_3d, v_3d, rel_vort_smooth, curve_vort_smooth = load_or_fetch_data(
+            u_2d, v_2d, rel_vort_smooth, curve_vort_smooth = load_or_fetch_data(
                 path_data_exp, file_exp_name, common_object, times,
                 time_index, smooth_field)
         else:
-            u_3d, v_3d, rel_vort_smooth, curve_vort_smooth = \
+            u_2d, v_2d, rel_vort_smooth, curve_vort_smooth = \
                 pull.get_variables_par(
-                    common_object, times[time_index], smooth_field=True)
+                    common_object, times[time_index], level=700,
+                    smooth_field=True)
 
         # Skip this time step if data is missing
-        if u_3d is None:
+        if u_2d is None:
             continue
-        
+
         # Raise an error if curvature vorticity data is missing
         if curve_vort_smooth is None:
             raise ValueError('Error: Curvature Vorticity data is missing')
 
         # Identify new starting points (vorticity maxima) at the 700 hPa level
-        unique_max_locs = track.get_starting_targets_2(common_object,
-                                                       curve_vort_smooth,
-                                                       level=700)
+        unique_max_locs = track.get_starting_targets(common_object,
+                                                     curve_vort_smooth)
+
+        # fig = plot_potential_loc_map(curve_vort_smooth, common_object,
+        #                              treshold=min_threshold,
+        #                              value_limit=0.000_02,
+        #                              label='Curvature Vorticity',
+        #                              points=unique_max_locs)
 
         # Update track locations if the list of existing AEW tracks is not empty
         if AEW_tracks_list:
@@ -536,17 +630,15 @@ if __name__ == '__main__':
                                                track_object,
                                                unique_max_locs,
                                                current_time_index,
-                                               curve_vort_smooth,
-                                               level=700)
+                                               curve_vort_smooth)
                 # track.unique_track_locations(
                 #     track_object, unique_max_locs,
                 #     current_time_index, common_object.radius)
-                
+
         # Remove duplicate locations by averaging those within a set radius
         if len(unique_max_locs) > 1:
             unique_max_locs = track.unique_locations(
                 unique_max_locs, common_object.radius, 99999999)
-
 
         # If unique_max_locs (local vorticity maxima) isn't empty,
         # create new AEW track objects
@@ -590,7 +682,7 @@ if __name__ == '__main__':
                     # allowed longitude
                     if limit_long_init and lat_lon_pair[1] < min_lon:
                         continue
-                    
+
                     # Create a new AEW track, add lat/lon and time, and
                     # append to AEW_tracks_list
                     aew_track = AEW_track()
@@ -608,16 +700,16 @@ if __name__ == '__main__':
             # Assign a magnitude from vorticity to each lat/lon point
             track.assign_magnitude(common_object, curve_vort_smooth,
                                    track_object)
-            
+
             # Filter out non-AEW tracks based on specific conditions
-            filter_result = track.filter_tracks_2(common_object, track_object,
-                                                  AEW_tracks_list)
+            filter_result = track.filter_tracks(common_object, track_object,
+                                                AEW_tracks_list)
 
             if filter_result.reject_track_direction or \
-                filter_result.reject_due_to_proximity:
+                    filter_result.reject_due_to_proximity:
                 AEW_tracks_list.remove(track_object)
                 continue
-            
+
             # Move completed tracks to the finished list
             elif filter_result.magnitude_finish_track \
                     or filter_result.latitude_finish_track:
@@ -626,7 +718,7 @@ if __name__ == '__main__':
                 continue
 
             # If no rejection, advect the tracks using wind data
-            track.advect_tracks(common_object, u_3d, v_3d,
+            track.advect_tracks(common_object, u_2d, v_2d,
                                 track_object, times, time_index)
 
         # Print the number of active and finished AEW tracks
@@ -640,14 +732,13 @@ if __name__ == '__main__':
                                          common_object,
                                          points=unique_max_locs,
                                          aew_list=AEW_tracks_list,
-                                         level=700,
                                          treshold=min_threshold,
                                          value_limit=0.000_02,
                                          label='Curvature Vorticity',
                                          title=date_ii)
 
             if save_fig:
-                fig.savefig(f'{path_fig_out}{time_index:04}.png',
+                fig.savefig(f'{path_fig}{time_index:04}.png',
                             dpi=200, bbox_inches='tight',
                             transparent=False, facecolor='white')
 
@@ -658,37 +749,32 @@ if __name__ == '__main__':
         set(AEW_tracks_list + finished_AEW_tracks_list))
     print("\t\tTotal number of AEW tracks: ", len(finished_AEW_tracks_list))
 
-    if plot_fig:
-        fig = plot_points_map(finished_AEW_tracks_list)
-
-
     # Filter out AEW tracks that do not meet certain criteria, such as
     # insufficient duration, insufficient distance traveled,
     # or incorrect location.
     discarted = []
     for aew_track in list(finished_AEW_tracks_list):
-        # Remove tracks that lasted less than two days (i.e., fewer than 
+        # Remove tracks that lasted less than two days (i.e., fewer than
         # 48 hours / dt time steps).
         if len(aew_track.latlon_list) < ((48/common_object.dt)+1):
             discarted.append(aew_track)
             finished_AEW_tracks_list.remove(aew_track)
             continue
 
-        # Separate the latitude/longitude pairs of the track into a numpy array 
+        # Separate the latitude/longitude pairs of the track into a numpy array
         # for easier computation.
         track_latlons = np.array([list(t)
                                   for t in zip(*aew_track.latlon_list)])
 
-        
-        # If the total longitudinal distance covered by the track is less than 
+        # If the total longitudinal distance covered by the track is less than
         # 15 degrees, discard the track as it is too short.
         if np.abs(track_latlons[1][0] - track_latlons[1][-1]) < 15:
             discarted.append(aew_track)
             finished_AEW_tracks_list.remove(aew_track)
             continue
 
-        # Ensure that the track has moved sufficiently far west. Using a 
-        # conservative estimate of 2.25 degrees/day (based on AEW movement of 
+        # Ensure that the track has moved sufficiently far west. Using a
+        # conservative estimate of 2.25 degrees/day (based on AEW movement of
         # ~250 km/day), calculate if the track covered enough longitudinal
         # distance.
         if abs(aew_track.latlon_list[0][1] - aew_track.latlon_list[-1][1])\
@@ -704,90 +790,41 @@ if __name__ == '__main__':
             discarted.append(aew_track)
             finished_AEW_tracks_list.remove(aew_track)
             continue
-        
-        
+
     # Print the total number of valid AEW tracks remaining after filtering.
     print(f"{'='*66}")
-    print(f"\t\tTracking Period: {start_date.strftime('%Y-%m-%d')} to "\
-        f"{end_date.strftime('%Y-%m-%d')}")
-    print(f"\t\tTotal number of valid AEW tracks: {len(finished_AEW_tracks_list)}")
+    print(f"\t\tTracking Period: {start_date.strftime('%Y-%m-%d')} to "
+          f"{end_date.strftime('%Y-%m-%d')}")
+    print(
+        f"\t\tTotal number of valid AEW tracks: {len(finished_AEW_tracks_list)}")
     print(f"{'='*66}")
 
-    # create figure which shows all the tracks
-    if plot_fig:
-        fig = plot_points_map(finished_AEW_tracks_list)
-
-        if save_fig:
-            fig.savefig(f'{path_fig_out}AEW.png',
-                        dpi=200, bbox_inches='tight',
-                        transparent=False, facecolor='white')
-            plt.close('all')
-
-    # Save tracks to file to a prickel object
     date_name = f"{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}"
-    name_file_out = f"{model}_AEW_tracks_{exp}_{date_name}.obj"
+    name_root = f'AEW_tracks_{radius_km}km_{date_name}'
+    
+    date_name_title = f"{start_date.strftime('%Y-%m-%d')} to "\
+        f"{end_date.strftime('%Y-%m-%d')}"
+    fig_title = f'{model} AEW: {date_name_title}'
+    
+    fig = plot_points_map(finished_AEW_tracks_list, title=fig_title)
+    fig.savefig(f'{path_fig}{name_root}.png',
+                dpi=200, bbox_inches='tight',
+                transparent=False, facecolor='white')
+    plt.close('all')
 
-    save_aew_tracks(path_data_out, name_file_out, finished_AEW_tracks_list)
+    # Save tracks to file to a prickel object    
+    name_file_out = f"{model}_{name_root}.obj"
+    save_aew_tracks(path_data, name_file_out, finished_AEW_tracks_list)
 
-    if experiment:
-        path_exp_clean_tracks = f'{path_fig_out}clean_tracks/'
-        util.create_path(path_exp_clean_tracks)
-
-        for time_index, time_i in tqdm(enumerate(times),
-                                       desc="Processing dates",
-                                       total=len(times),
-                                       leave=True):
-
-            date_ii = time_i.strftime('%Y-%m-%d %H:%M:%S')
-            print(f"{'-'*66}")
-            print(f"{date_ii:^66}")
-            print(f"{'-'*66}")
-
-            file_exp_name = f"{time_i.strftime('%Y-%m-%d_%H:%M:%S')}.obj"
-
-            u_3d, v_3d, rel_vort_3d, curve_vort_3d = load_or_fetch_data(
-                path_data_exp, file_exp_name, common_object, times,
-                time_index, smooth_field)
-
-            active_aew_list = []
-            for track_object in finished_AEW_tracks_list:
-                # get the index of current time from the time list associated
-                # with the track object
-                try:
-                    current_time_index = track_object.time_list.index(
-                        times[time_index])
-                    # Create a new AEW_track object for the cut track
-                    new_aew_track = AEW_track()
-
-                    # Copy latitude/longitude, magnitude, and time data
-                    # up to current time index
-                    new_aew_track.latlon_list = \
-                        track_object.latlon_list[:current_time_index + 1]
-                    new_aew_track.magnitude_list = \
-                        track_object.magnitude_list[:current_time_index + 1]
-                    new_aew_track.time_list = \
-                        track_object.time_list[:current_time_index + 1]
-
-                    # Append the new "cut" AEW track to the active list
-                    active_aew_list.append(new_aew_track)
-
-                except ValueError:
-                    continue
-
-            fig = plot_potential_loc_map(curve_vort_3d,
-                                         common_object,
-                                         aew_list=active_aew_list,
-                                         level=700,
-                                         treshold=min_threshold,
-                                         value_limit=0.000_02,
-                                         label='Curvature Vorticity',
-                                         title=date_ii)
-            if save_fig:
-                fig.savefig(f'{path_exp_clean_tracks}{time_index:04}.png',
-                            dpi=200, bbox_inches='tight',
-                            transparent=False, facecolor='white')
-
-                plt.close('all')
+    if experiment and save_fig:
+        process_clean_tracks(path_data_exp, path_fig, times,
+                             finished_AEW_tracks_list,
+                             common_object, min_threshold,
+                             save_fig=save_fig,
+                             smooth_field=True)
+        print(f"{'='*66}")
+        print("\t\tTotal number of AEW tracks: ", len(finished_AEW_tracks_list))
+        print(f"{'='*66}")
 
 
 # %%
