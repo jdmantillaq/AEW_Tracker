@@ -1,5 +1,7 @@
 # %%
 from __future__ import division  # makes division not round with integers
+import dask.array as da
+from dask import delayed, compute
 from numba import jit
 import pygrib
 from netCDF4 import Dataset
@@ -14,7 +16,7 @@ model the data came from.
 '''
 
 
-def get_common_track_data(common_object):
+def get_common_track_data(common_object, level=700):
     """
     Obtain common data necessary for tracking atmospheric features over
     Africa and the Atlantic.
@@ -39,9 +41,6 @@ def get_common_track_data(common_object):
     west_lon = -90.  # 90
     east_lon = 30.
 
-    # Pressure levels at which to retrieve data (hPa)
-    level = [850, 700, 600]
-
     if common_object.model == 'ERA5':
         dt = 6  # time between files
         file_location = '/mnt/ERA5/202007/ERA5_PL-20200701_0000.grib'
@@ -50,7 +49,7 @@ def get_common_track_data(common_object):
 
         # Select the specific variable for U and V components of wind
         grb = fileidx.select(name='U component of wind',
-                             typeOfLevel='isobaricInhPa', level=level[0])[0]
+                             typeOfLevel='isobaricInhPa', level=level)[0]
 
         # Extract latitudes and longitudes
         lat_2d_n_s, lon_2d_360 = grb.latlons()
@@ -116,96 +115,115 @@ def get_common_track_data(common_object):
     common_object.lon_max = lon_max
     return
 
-import dask.array as da
-from dask import delayed, compute
+
 # Function to extract U and V wind components for a given level
-@delayed
+# @delayed
 def get_uv_for_level(fileidx, level):
     """Retrieve U and V components of wind at a specific level."""
     u_grb = fileidx.select(name='U component of wind',
-                        typeOfLevel='isobaricInhPa',
-                        level=level)[0]
+                           typeOfLevel='isobaricInhPa',
+                           level=level)[0]
     v_grb = fileidx.select(name='V component of wind',
-                        typeOfLevel='isobaricInhPa',
-                        level=level)[0]
+                           typeOfLevel='isobaricInhPa',
+                           level=level)[0]
     # Extract the data (values) from the GRIB messages
     u_values = np.flip(u_grb.values, axis=0)
     v_values = np.flip(v_grb.values, axis=0)
     return u_values, v_values
 
+
 def get_variables_par(common_object, date_time,
-                       level=np.array([850, 700, 600]),
-                       smooth_field=False):
+                      level=700,
+                      smooth_field=False):
     """
     Get the ERA5 variables required for tracking.
 
     This function takes the common_object that holds lat/lon information,
     the date and time for the desired file. It returns u, v, relative
-    vorticity, and curvature vorticity on specific pressure levels.
+    vorticity, and curvature vorticity on specific pressure level.
 
     Parameters:
         common_object: Object containing common attributes such as lat/lon
             information.
         date_time (datetime.datetime): Date and time for the desired file.
-        level (np.array): Pressure levels at which to retrieve data.
-            Defaults to np.array([850, 700, 600]).
+        level (np.array): Pressure level at which to retrieve data).
 
     Returns:
         tuple: A tuple containing u, v, relative vorticity, and curvature
-        vorticity on specific pressure levels.
+        vorticity on specific pressure level.
     """
     from os import path
     # from joblib import Parallel, delayed
     import dask.array as da
     from dask import delayed, compute
+    from utilities import get_files_in_folder
+    import pandas as pd
 
     # location of ERA5 files
     file_location = '/mnt/ERA5/'
     # open file
-    tempofile = f'{file_location}{date_time.strftime("%Y%m")}/'\
-        f'ERA5_PL-{date_time.strftime("%Y%m%d_%H")}00.grib'
+    directory = f'{file_location}{date_time.strftime("%Y%m")}/'
+    file_name = f'ERA5_PL-{date_time.strftime("%Y%m%d_%H")}00.grib'
 
+    tempofile = directory + file_name
     # Check if the file exists
     if not path.exists(tempofile):
-        raise OSError(f"File not found: {tempofile}")
+        try:
+            # Get all available files and parse their timestamps
+            files = get_files_in_folder(directory, 'ERA5_PL*.grib')
+            if len(files) == 0:
+                print(f"Error: No files found in directory - {directory}")
+                return None, None, None, None
+
+            dates_files = pd.to_datetime([f[-18:-5] for f in files],
+                                         format='%Y%m%d_%H%M')
+            time_diffs = abs(dates_files - date_time)
+
+            # Find the closest file within a 1-hour threshold
+            closest_idx = np.argmin(time_diffs)
+            print(closest_idx)
+
+            if time_diffs[closest_idx] <= pd.Timedelta(hours=1):
+                tempofile = files[closest_idx]
+                print("\tWarning: Using closest available file at "
+                      f"{dates_files[closest_idx]}")
+            else:
+                print("Error: No suitable file within 1-hour range of "
+                      f"{date_time}")
+                return None, None, None, None
+
+        except Exception as e:
+            print(f"Error locating file: {e}")
+            return None, None, None, None
 
     fileidx = pygrib.open(tempofile)
 
-    
-
     # Use Dask delayed for parallelization of U and V wind retrieval for each level
-    uv_results = [get_uv_for_level(fileidx, lev) for lev in level]
+    uv_results = get_uv_for_level(fileidx, level)
 
     # Compute the results in parallel
-    uv_results_computed = compute(*uv_results)
+    # uv_results_computed = compute(*uv_results)
 
     # Extract latitudes and longitudes from the first level
-    latd, lond = uv_results_computed[0][0].shape
+    latd, lond = uv_results[0].shape
 
     # Initialize arrays for U and V wind components at each pressure level
-    u_levels = np.zeros([len(level), latd, lond], dtype=np.float32)
+    u_levels = np.zeros([latd, lond], dtype=np.float32)
     v_levels = np.zeros_like(u_levels)
 
-    # Assign the computed U and V data to arrays
-    for i, (u_data, v_data) in enumerate(uv_results_computed):
-        u_levels[i, :, :] = u_data
-        v_levels[i, :, :] = v_data
+    u_levels = uv_results[0]
+    v_levels = uv_results[1]
 
     # crop the u_levels and v_levels arrays.
     # We don't need the entire global dataset
-    u_levels = u_levels[:, common_object.lat_index_south:
+    u_levels = u_levels[common_object.lat_index_south:
                         common_object.lat_index_north+1, :]
-    u_levels = u_levels[:, :, common_object.lon_index_west:
+    u_levels = u_levels[:, common_object.lon_index_west:
                         common_object.lon_index_east+1]
-    v_levels = v_levels[:, common_object.lat_index_south:
+    v_levels = v_levels[common_object.lat_index_south:
                         common_object.lat_index_north+1, :]
-    v_levels = v_levels[:, :, common_object.lon_index_west:
+    v_levels = v_levels[:, common_object.lon_index_west:
                         common_object.lon_index_east+1]
-
-    # make the arrays C contiguous
-    # (will need this later for the wrapped C smoothing function)
-    # u_levels = np.asarray(u_levels, order='C')
-    # v_levels = np.asarray(v_levels, order='C')
 
     # calculate the relative vorticity
     rel_vort_levels = calc_rel_vort(
@@ -215,24 +233,21 @@ def get_variables_par(common_object, date_time,
         common_object.lat, u_levels, v_levels, rel_vort_levels)
 
     if smooth_field:
-        curve_vort_levels = radially_averaged(common_object.lon,
-                                              common_object.lat,
-                                              curve_vort_levels,
-                                              res=common_object.res,
-                                              radius=600)
-        rel_vort_levels = radially_averaged(common_object.lon,
-                                            common_object.lat,
-                                            rel_vort_levels,
-                                            res=common_object.res,
-                                            radius=600)
+        curve_vort_levels = radially_averaged_2d(common_object.lon,
+                                                 common_object.lat,
+                                                 curve_vort_levels,
+                                                 res=common_object.res,
+                                                 radius=600)
+        rel_vort_levels = radially_averaged_2d(common_object.lon,
+                                               common_object.lat,
+                                               rel_vort_levels,
+                                               res=common_object.res,
+                                               radius=600)
 
     if curve_vort_levels is not None and rel_vort_levels is not None:
 
         rel_vort_levels = np.float32(rel_vort_levels)
         curve_vort_levels = np.float32(curve_vort_levels)
-
-        # rel_vort_levels = np.asarray(rel_vort_levels, order='C')
-        # curve_vort_levels = np.asarray(curve_vort_levels, order='C')
 
     return u_levels, v_levels, rel_vort_levels, curve_vort_levels
 
@@ -318,24 +333,21 @@ def get_ERA5_variables(common_object, date_time,
         common_object.lat, u_levels, v_levels, rel_vort_levels)
 
     if smooth_field:
-        curve_vort_levels = radially_averaged(common_object.lon,
-                                              common_object.lat,
-                                              curve_vort_levels,
-                                              res=common_object.res,
-                                              radius=600)
-        rel_vort_levels = radially_averaged(common_object.lon,
-                                            common_object.lat,
-                                            rel_vort_levels,
-                                            res=common_object.res,
-                                            radius=600)
+        curve_vort_levels = radially_averaged_2d(common_object.lon,
+                                                 common_object.lat,
+                                                 curve_vort_levels,
+                                                 res=common_object.res,
+                                                 radius=600)
+        rel_vort_levels = radially_averaged_2d(common_object.lon,
+                                               common_object.lat,
+                                               rel_vort_levels,
+                                               res=common_object.res,
+                                               radius=600)
 
     if curve_vort_levels is not None and rel_vort_levels is not None:
 
         rel_vort_levels = np.float32(rel_vort_levels)
         curve_vort_levels = np.float32(curve_vort_levels)
-
-        # rel_vort_levels = np.asarray(rel_vort_levels, order='C')
-        # curve_vort_levels = np.asarray(curve_vort_levels, order='C')
 
     return u_levels, v_levels, rel_vort_levels, curve_vort_levels
 
@@ -408,9 +420,9 @@ def x_derivative(variable, lat, lon):
         # Calculate dx for this latitude
         dx = radius[nlat] * dlon
         # Compute the gradient along the longitude axis
-        grad = np.gradient(variable[:, nlat, :], dx, axis=1)
+        grad = np.gradient(variable[nlat, :], dx, axis=0)
         # Store the derivative with respect to longitude
-        d_dx[:, nlat, :] = grad
+        d_dx[nlat, :] = grad
 
     return d_dx
 
@@ -442,7 +454,7 @@ def y_derivative(variable, lat):
     dy = 6367500.0 * dlat
 
     # calculate the d/dy derivative using the gradient function
-    d_dy = np.gradient(variable, dy, axis=1)
+    d_dy = np.gradient(variable, dy, axis=0)
 
     # Return the derivative with respect to latitude
     return d_dy
@@ -549,9 +561,8 @@ def calc_curve_vort(common_object, u, v, rel_vort):
     return curve_vort
 
 
-def radially_averaged(lon, lat, data_file, res, radius=600, n_jobs=-1):
+def radially_averaged_3d(lon, lat, data_file, res, radius=600, n_jobs=-1):
     from joblib import Parallel, delayed
-    # import time as tm
     import numpy as np
 
     def get_dist_meters(lon, lat):
@@ -640,13 +651,102 @@ def radially_averaged(lon, lat, data_file, res, radius=600, n_jobs=-1):
         curv_array = GetBG(lon, lat, data_file[slc_num, :, :], res, radius)
         return curv_array
 
-    # start = tm.time()
     results = Parallel(n_jobs=n_jobs)(delayed(run_loop)(i, radius)
                                       for i in np.arange(data_file.shape[0]))
-    # end = tm.time()
-    # print('Time to run computation: {:.2f} seconds'.format(end - start))
 
     return np.array(results)
+
+
+def radially_averaged_2d(lon, lat, data_file, res, radius=600, n_jobs=-1):
+    # from joblib import Parallel, delayed
+    import numpy as np
+
+    def get_dist_meters(lon, lat):
+        earth_circ = 6371 * 2 * np.pi * 1000  # Earth's circumference in meters
+        lat_met = earth_circ / 360  # meters per degree latitude
+        lat_dist = np.gradient(lat, axis=0) * lat_met
+        lon_dist = np.gradient(lon, axis=1) * np.cos(np.deg2rad(lat)) * lat_met
+        return lon_dist, lat_dist
+
+    def get_background_grid(lon, lat, data_file, res, radius=600):
+        """
+        Computes a background grid averaged over a specified radius
+        for each grid point.
+        """
+        def rad_mask(i, j, dx, dy, radius):
+            """Generate a radial mask for averaging within the
+            given radius around (i, j)."""
+            # Earth's circumference in meters
+            earth_circ = 6371 * 2 * np.pi * 1000
+            lat_met = earth_circ / 360  # meters per degree latitude
+            lat_km_lat = lat_met / 1000
+            lat_km_lon = lat_met / 1000 / 2  # Adjusted for latitude effects
+
+            # Define buffer based on radius
+            buffer = int(np.ceil(radius / lat_km_lat / res))
+            buffer_j = int(np.ceil(radius / lat_km_lon / res))
+
+            boolean_array = np.zeros(np.shape(dx), dtype=bool)
+
+            # Slice out a box region to limit computation
+            i_st = max(i - (buffer + 1), 0)
+            i_end = min(i + (buffer + 1), dx.shape[0])
+            j_st = max(j - (buffer_j + 1), 0)
+            j_end = min(j + (buffer_j + 1), dx.shape[1])
+
+            new_i = i - i_st
+            new_j = j - j_st
+
+            dy_slc = dy[i_st:i_end, j_st:j_end]
+            dx_slc = dx[i_st:i_end, j_st:j_end]
+
+            i_array_sub = np.zeros(np.shape(dy_slc))
+            j_array_sub = np.zeros(np.shape(dx_slc))
+
+            # Accumulate distances from the center point (i, j)
+            i_array_sub[new_i, :] = 0
+            i_array_sub[(new_i + 1):,
+                        :] = np.add.accumulate(dy_slc[(new_i + 1):, :])
+            i_array_sub[(new_i - 1)::-1,
+                        :] = np.add.accumulate(dy_slc[(new_i - 1)::-1, :])
+
+            j_array_sub[:, new_j] = 0
+            j_array_sub[:, (new_j + 1):] = \
+                np.add.accumulate(dx_slc[:, (new_j + 1):], axis=1)
+            j_array_sub[:, (new_j - 1)::-1] = \
+                np.add.accumulate(dx_slc[:, (new_j - 1)::-1], axis=1)
+
+            radial_array = (np.sqrt(np.square(i_array_sub) +
+                            np.square(j_array_sub)) / 1000) < radius
+            boolean_array[i_st:i_end, j_st:j_end] = radial_array
+
+            return boolean_array
+
+        # Calculate distance arrays
+        dx, dy = get_dist_meters(lon, lat)
+
+        # Define bounds
+        i_bounds = np.arange(int(np.ceil(
+            radius / (6371 * 2 * np.pi * 1000 / 360) / res)) + 1,
+            np.shape(data_file)[0])
+        j_bounds = np.arange(int(np.ceil(
+            radius / (6371 * 2 * np.pi * 1000 / 360 / 2) / res)) + 1,
+            np.shape(data_file)[1])
+
+        # Output grid for averaged values
+        avg_grid = np.zeros(np.shape(data_file))
+
+        # Iterate over grid points
+        for y in i_bounds:
+            for x in j_bounds:
+                out_mask = rad_mask(y, x, dx, dy, radius)
+                avg_grid[y, x] = np.mean(data_file[out_mask])
+        return avg_grid
+
+    # Since data_file is 2D, process it directly
+    result = get_background_grid(lon, lat, data_file, res, radius)
+
+    return np.array(result)
 
 
 def calc_curve_vort_numba(lat, u, v, rel_vort):
@@ -691,49 +791,49 @@ def calc_curve_vort_numba(lat, u, v, rel_vort):
         v_unit_vec = v / vec_mag
 
         shear_vort = np.empty_like(u)
-        for lon_index in range(u.shape[2]):
-            for lat_index in range(u.shape[1]):
+        for lon_index in range(u.shape[1]):
+            for lat_index in range(u.shape[0]):
                 lon_index_previous = max(lon_index - 1, 0)
-                lon_index_next = min(lon_index + 1, u.shape[2] - 1)
+                lon_index_next = min(lon_index + 1, u.shape[1] - 1)
                 lat_index_previous = max(lat_index - 1, 0)
-                lat_index_next = min(lat_index + 1, u.shape[1] - 1)
+                lat_index_next = min(lat_index + 1, u.shape[0] - 1)
 
                 di = 0
                 dj = 0
-                v1 = ((u_unit_vec[:, lat_index, lon_index]
-                       * u[:, lat_index, lon_index_previous])
-                      + (v_unit_vec[:, lat_index, lon_index]
-                         * v[:, lat_index, lon_index_previous])) \
-                    * v_unit_vec[:, lat_index, lon_index]
+                v1 = ((u_unit_vec[lat_index, lon_index]
+                       * u[lat_index, lon_index_previous])
+                      + (v_unit_vec[lat_index, lon_index]
+                         * v[lat_index, lon_index_previous])) \
+                    * v_unit_vec[lat_index, lon_index]
                 if lon_index_previous != lon_index:
                     di += 1
 
-                v2 = ((u_unit_vec[:, lat_index, lon_index]
-                       * u[:, lat_index, lon_index_next])
-                      + (v_unit_vec[:, lat_index, lon_index]
-                         * v[:, lat_index, lon_index_next]))\
-                    * v_unit_vec[:, lat_index, lon_index]
+                v2 = ((u_unit_vec[lat_index, lon_index]
+                       * u[lat_index, lon_index_next])
+                      + (v_unit_vec[lat_index, lon_index]
+                         * v[lat_index, lon_index_next]))\
+                    * v_unit_vec[lat_index, lon_index]
                 if lon_index_next != lon_index:
                     di += 1
 
-                u1 = ((u_unit_vec[:, lat_index, lon_index]
-                       * u[:, lat_index_previous, lon_index])
-                      + (v_unit_vec[:, lat_index, lon_index]
-                         * v[:, lat_index_previous, lon_index]))\
-                    * u_unit_vec[:, lat_index, lon_index]
+                u1 = ((u_unit_vec[lat_index, lon_index]
+                       * u[lat_index_previous, lon_index])
+                      + (v_unit_vec[lat_index, lon_index]
+                         * v[lat_index_previous, lon_index]))\
+                    * u_unit_vec[lat_index, lon_index]
                 if lat_index_previous != lat_index:
                     dj += 1
 
-                u2 = ((u_unit_vec[:, lat_index, lon_index]
-                       * u[:, lat_index_next, lon_index])
-                      + (v_unit_vec[:, lat_index, lon_index]
-                         * v[:, lat_index_next, lon_index])) \
-                    * u_unit_vec[:, lat_index, lon_index]
+                u2 = ((u_unit_vec[lat_index, lon_index]
+                       * u[lat_index_next, lon_index])
+                      + (v_unit_vec[lat_index, lon_index]
+                         * v[lat_index_next, lon_index])) \
+                    * u_unit_vec[lat_index, lon_index]
                 if lat_index_next != lat_index:
                     dj += 1
 
                 if di > 0 and dj > 0:
-                    shear_vort[:, lat_index, lon_index] = (
+                    shear_vort[lat_index, lon_index] = (
                         (v2 - v1) / (float(di) * dx[lat_index, lon_index])) \
                         - ((u2 - u1) / (float(dj) * dy[lat_index, lon_index]))
 
